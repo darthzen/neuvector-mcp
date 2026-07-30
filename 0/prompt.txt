@@ -1,0 +1,9 @@
+I'm not seeing the project on github
+
+---
+
+It's running. How is the farming work going to reflect in entire.io? Will it be able to see what was done by qwen vs claude?
+
+---
+
+Let's patch for option 1.
