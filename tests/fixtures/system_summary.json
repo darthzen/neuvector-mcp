@@ -1,0 +1,1 @@
+{"summary":{"hosts":3,"running_pods":41,"running_workloads":57,"services":22,"policy_rules":140,"enforcers":3,"controllers":3,"domains":9,"cvedb_version":"2026.07.28","platform":"Kubernetes","kube_version":"v1.31.4+k3s1"}}

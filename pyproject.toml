@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neuvector-mcp"
+version = "1.0.0"
+description = "Model Context Protocol server for the SUSE NeuVector container security platform"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "fastmcp==3.4.5",
+  "httpx==0.28.1",
+  "pydantic==2.13.4",
+  "structlog==26.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.2",
+  "pytest-asyncio==1.4.0",
+  "pytest-cov==7.0.0",
+  "respx==0.23.1",
+  "mypy==1.18.2",
+  "ruff==0.14.4",
+]
+
+[project.scripts]
+neuvector-mcp = "neuvector_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/neuvector_mcp"]
+
+# --- test ---------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = ["error::DeprecationWarning:neuvector_mcp.*"]
+
+[tool.coverage.run]
+source = ["neuvector_mcp"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+
+# --- lint ---------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "T20", "SIM", "RUF", "ASYNC", "S"]
+ignore = [
+  "S101",   # assert is how tests assert
+  "N818",   # trailing-underscore error names are deliberate (PermissionError_)
+  "B008",   # Field() in Annotated defaults is the FastMCP idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "T201"]
+"scripts/**" = ["T201"]
+
+# --- types --------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "scripts"]
+strict = true
+warn_unreachable = true
+disallow_untyped_decorators = false   # FastMCP decorators are untyped upstream
+
+[[tool.mypy.overrides]]
+module = ["respx.*", "structlog.*"]
+ignore_missing_imports = true

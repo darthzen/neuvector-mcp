@@ -1,0 +1,25 @@
+# Fleet bundle. Place this file and deployment.yaml in the same directory of your
+# GitOps repo; Fleet applies every manifest in the directory.
+defaultNamespace: neuvector-mcp
+labels:
+  bundle: neuvector-mcp
+targetCustomizations:
+  - name: read-only-default
+    clusterSelector: {}
+    yaml:
+      overlays: []
+diff:
+  comparePatches:
+    # The two Secrets are managed outside Fleet; do not let Fleet revert them.
+    - apiVersion: v1
+      kind: Secret
+      name: neuvector-mcp-controller
+      namespace: neuvector-mcp
+      operations:
+        - { op: remove, path: /data }
+    - apiVersion: v1
+      kind: Secret
+      name: neuvector-mcp-clients
+      namespace: neuvector-mcp
+      operations:
+        - { op: remove, path: /data }
