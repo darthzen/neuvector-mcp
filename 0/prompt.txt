@@ -1,0 +1,1 @@
+Read the spec in this directory and chunk it into tasks to build a ticket queue in github for farming out the coding to ollama via github.com/darthzen/ollama-code-mcp (local mirror in ~/Developer/ollama-code-mcp) and using github.com/darthzen/agent-build-tools (~/Developer/agent-build-tools) workflow
