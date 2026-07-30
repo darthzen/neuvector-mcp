@@ -1,0 +1,1526 @@
+I need to get this done tonight, so let's table the farming and the testing and you go ahead and write the whole thing.
+
+---
+
+Neuvector is running in both the local and sdf1 k3s clusters. Auth is federated with the local cluster being the master. Use the live implementations for testing. This is a throwaway lab environment, so testing will not have a negative impact. If you need to generate tokens to connect for testing, you are authorized.
+
+---
+
+<task-notification>
+<task-id>a6422c2919c33816a</task-id>
+<tool-use-id>toolu_015F8MQrb7MakCo9nM3525fp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/a6422c2919c33816a.output</output-file>
+<status>completed</status>
+<summary>Agent "Build runtime_ops toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Both files are written and validated: the module compiles, all six `Calls` lines resolve as **documented** against `spec_endpoints.json` via `verify_spec.CALLS_RE` + `path_matches`, and no line exceeds the 100-char limit.
+
+Files written:
+- `/Users/rashford/Library/Mobile Documents/com~apple~CloudDocs/Developer/neuvector-mcp/src/neuvector_mcp/tools/runtime_ops.py`
+- `/Users/rashford/Library/Mobile Documents/com~apple~CloudDocs/Developer/neuvector-mcp/tests/test_runtime_ops.py`
+
+## 1. models.py additions (Phase 9 shared helpers — `scan_ops` needs the first three too, so merge once)
+
+```python
+#: JSON field names whose VALUE is a credential. Exact-match, not substring:
+#: every name here is a real field in appendix/B-schema-reference.md.
+#:   password              RESTRegistryConfig, RESTUser, RESTJfrogXrayConfig, RESTProxyConfig
+#:   auth_token            RESTRegistryConfig
+#:   gitlab_private_token  RESTRegistryConfig
+#:   secret_access_key     RESTAWSAccountKeyConfig
+#:   json_key              RESTGCRKeyConfig
+#:   personal_access_token RESTRemoteRepo_GitHubConfig
+#:   apikey_secret         RESTApikey, RESTApikeyGenerated
+SECRET_FIELDS: frozenset[str] = frozenset(
+    {
+        "password",
+        "auth_token",
+        "gitlab_private_token",
+        "secret_access_key",
+        "json_key",
+        "personal_access_token",
+        "apikey_secret",
+    }
+)
+
+#: The single sentinel a preview payload shows in place of a credential.
+REDACTED = "***"
+
+
+def redact_secrets(obj: Any) -&gt; Any:
+    """Deep copy of ``obj`` with every :data:`SECRET_FIELDS` value replaced by '***'.
+
+    Absent keys stay absent: this never introduces a field the controller was not
+    going to receive, so the redacted copy has the same SHAPE as the wire copy and
+    is therefore a stable basis for the confirmation token.
+    """
+    if isinstance(obj, dict):
+        return {
+            key: (REDACTED if key in SECRET_FIELDS else redact_secrets(value))
+            for key, value in obj.items()
+        }
+    if isinstance(obj, list):
+        return [redact_secrets(item) for item in obj]
+    return obj
+
+
+def service_namespace(service_name: str) -&gt; str:
+    """Namespace of a NeuVector service name.
+
+    NeuVector names a Kubernetes service group ``&lt;service&gt;.&lt;namespace&gt;`` (see
+    ``RESTService.name`` and ``RESTService.domain`` in appendix B). Returns "" when
+    the name carries no namespace suffix, e.g. a Docker-only service.
+    """
+    _, _, suffix = service_name.rpartition(".")
+    return suffix if "." in service_name else ""
+```
+
+No new `Field(description=...)` classes are required by `runtime_ops` — all four tools return the existing `WriteOutcome`.
+
+## 2. Fixtures
+
+**None written.** PART-D D.1.4 names no new fixture for `runtime_ops`; all four routes have empty documented 200 bodies, so the tests respond `200, json={}` inline (D.1.4 explicitly forbids inventing fixture files for empty bodies). D.1.4 lists `tests/fixtures/services.json` as a *reused* fixture — it does not exist on disk yet but is already referenced by `tests/test_inventory.py`, so it belongs to the inventory agent. My tests deliberately do not depend on it.
+
+## 3. `Calls` lines (6 across 4 tools)
+
+```
+Calls POST /v1/workload/request/{id} with {"request": {"command": ...}}.
+Calls PATCH /v1/service/config with scope='both'.
+Calls PATCH /v1/service/config/network with scope='network'.
+Calls PATCH /v1/service/config/profile with scope='profile'.
+Calls POST /v1/sniffer with f_workload and {"sniffer": {...}}.
+Calls PATCH /v1/sniffer/stop/{id}.
+```
+
+`GET /v1/sniffer/{id}/pcap` is named in prose inside `nv_start_packet_capture`'s docstring as the route this server deliberately does **not** expose; it is not preceded by `Calls`, so R6 does not pick it up (verified — the parser found exactly 6).
+
+## 4. Blast-radius text per tool (all docstrings verbatim from PART-D)
+
+- **`nv_quarantine_workload`** — "The highest blast radius of any tool in this server. Quarantine severs the container's network connectivity while leaving the process running: every inbound and outbound connection stops, so if the container serves live traffic that traffic fails immediately and any dependent service fails with it. Nothing is deleted and the container is not restarted - call again with action='unquarantine' to restore it." Guard `effect`: *"Sever all network connectivity of container 'X' in namespace 'Y'. Live traffic to and from it will fail immediately."*
+- **`nv_set_service_mode`** — "Traffic-affecting: moving a service to Protect starts BLOCKING connections and process activity that its learned policy does not allow, for every container in that service at once, and a service whose learning was incomplete will break the moment you do it. Preview first and read the service list in the plan." Guard `effect` appends, only for `Protect`: *"Traffic and process activity outside the learned policy will be blocked immediately."* (same wording as `nv_set_group_policy_mode`, which `test_guard.py` keys on).
+- **`nv_start_packet_capture`** — "Privacy-sensitive: this records the container's actual network traffic, payloads included, onto the enforcer's disk. Anything the container carries in clear - credentials, personal data, another tenant's requests - lands in that file… The capture file is NOT retrievable through this server." Guard `effect` with no filter: *"…NO FILTER IS SET, so every packet including payloads will be recorded."*
+- **`nv_stop_packet_capture`** — "Stops the enforcer writing further packets and leaves the file it has already written in place, so this reduces exposure rather than eliminating it - the captured traffic still exists on the enforcer until it is removed out of band."
+
+## 5. BLOCKED items
+
+None blocking. Two spec-recorded gaps carried through as written (no guessing):
+- `RESTWorkloadRequest.command` has no enum in Appendix B — constrained client-side by the `Literal["quarantine","unquarantine"]`, per PART-D's `BLOCKED (partial)`.
+- `POST /v1/sniffer`'s 200 body is bare `object` — not projected; passed through to `controller_response`.
+
+Two things worth your review as the merger:
+1. **`controller_response` redaction.** PHASE-9 and D.0.4 both say every tool in this phase redacts `controller_response`, but PART-D's verbatim body block for `nv_quarantine_workload` shows the raw `response`. I followed the two prose invariants and used `redact_secrets(response) if isinstance(response, dict) else {}` in all four tools. It is an identity transform for secret-free bodies, so no exact-body test is affected.
+2. **`filter` argument** shadows a builtin and ruff has `A` enabled, so the parameter carries `# noqa: A002` with a reason comment. I did not touch `pyproject.toml`.
+
+Tests written (21): the four PART-D-named sets, plus `test_runtime_ops_hidden_when_read_only`, `test_runtime_ops_error_codes_classify` (code 22 → conflict, code 25 → permission), `test_runtime_ops_annotations_declare_traffic_impact`, and an extra namespace-refusal test for packet capture. Every mutating route has both a `call_count == 0` preview test and an exact-JSON-body `call_count == 1` confirmed test.</result>
+<usage><subagent_tokens>103139</subagent_tokens><tool_uses>26</tool_uses><duration_ms>330272</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5cd6ef57791b2703</task-id>
+<tool-use-id>toolu_01G3aevozYSeaKgRCVe451hs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/a5cd6ef57791b2703.output</output-file>
+<status>completed</status>
+<summary>Agent "Build inventory toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>`build-plan/models-fragments/10-inventory.py` — 454 lines, 15 classes.
+
+`build-plan/models-fragments/00-helpers-inventory.py` — not written (no shared helpers defined).</result>
+<usage><subagent_tokens>129568</subagent_tokens><tool_uses>1</tool_uses><duration_ms>15439</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a31c875ab04a0bccc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/a31c875ab04a0bccc.output</output-file>
+<status>completed</status>
+<summary>Agent "Build iam_read toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>build-plan/models-fragments/60-iam_read.py
+283 lines</result>
+<usage><subagent_tokens>100072</subagent_tokens><tool_uses>1</tool_uses><duration_ms>14947</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7a3db16461b5b2ec</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/a7a3db16461b5b2ec.output</output-file>
+<status>completed</status>
+<summary>Agent "Build iam_write toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>`/Users/rashford/Library/Mobile Documents/com~apple~CloudDocs/Developer/neuvector-mcp/build-plan/models-fragments/00-helpers-iam_write.py` — 39 lines.</result>
+<usage><subagent_tokens>110159</subagent_tokens><tool_uses>2</tool_uses><duration_ms>13281</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6422c2919c33816a</task-id>
+<tool-use-id>toolu_0146LRwKwwdCwV2CGhYqVPUK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/a6422c2919c33816a.output</output-file>
+<status>completed</status>
+<summary>Agent "Build runtime_ops toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>/Users/rashford/Library/Mobile Documents/com~apple~CloudDocs/Developer/neuvector-mcp/build-plan/models-fragments/00-helpers-runtime_ops.py — 51 lines</result>
+<usage><subagent_tokens>108520</subagent_tokens><tool_uses>3</tool_uses><duration_ms>20194</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad0a24b08920fbd50</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/ad0a24b08920fbd50.output</output-file>
+<status>completed</status>
+<summary>Agent "Build admission toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verified end-to-end with a stubbed `AdmissionCriterionInput` (Phase 6 hasn't merged it yet): all 4 tools register, annotations are correct, exact bodies match, token binding rejects a monitor→protect swap, and code 30 classifies.
+
+## 1. Model classes to append to `models.py`
+
+**None.** Part C §C.10 is explicit: *"Phase 8 appends nothing — `admission.py` reuses `AdmissionCriterionInput` (Phase 6) and `WriteOutcome` (Phase 0)."* My module imports `from ..models import AdmissionCriterionInput, WriteOutcome` and does not redefine either. Module-level definitions live in `admission.py` only: `MUTATING`, `MAX_ADMISSION_CRITERIA = 16`, `_criterion_body`, `register`.
+
+## 2. Fixture files written
+
+| File | Shape |
+|---|---|
+| `tests/fixtures/admission_rule_created.json` | envelope key `rule` (`RESTAdmissionRuleData.rule`), `id: 1001` + category/comment/criteria/disable/critical/cfg_type/rule_type/rule_mode/containers |
+| `tests/fixtures/error_admctrl_unsupported.json` | bare `RESTError`, `code: 30` |
+| `tests/fixtures/error_object_not_found.json` | bare `RESTError`, `code: 7` (shared with policy_write) |
+| `tests/fixtures/error_read_only_rules.json` | bare `RESTError`, `code: 46` (shared) |
+| `tests/fixtures/error_op_not_allowed.json` | bare `RESTError`, `code: 4` (shared; used C.9.2's verbatim example body so both agents converge) |
+
+`error` strings are verbatim from Appendix C.
+
+## 3. `Calls` lines (all 4 resolve against `spec_endpoints.json["documented"]`, verified with the real `CALLS_RE`)
+
+```
+nv_set_admission_state    Calls PATCH /v1/admission/state with {"state": {...}}.
+nv_create_admission_rule  Calls POST /v1/admission/rule with {"config": {...}}.
+nv_update_admission_rule  Calls PATCH /v1/admission/rule with {"config": {"id":..., ...}}.
+nv_delete_admission_rule  Calls DELETE /v1/admission/rule/{id}.
+```
+
+`PATCH /v1/admission/rule` has no `{id}` segment; the id is `config.id`. Two tests pin this (`test_update_admission_rule_confirmed_sends_id_in_body` and a dedicated `test_admission_rule_patch_has_no_id_in_path`, which PHASE-8 names).
+
+## 4. `destructiveHint`
+
+All four are `True` — the module defines only `MUTATING` (no `MUTATING_CREATE`, no `MUTATING_IDEMPOTENT`).
+
+| Tool | Reason |
+|---|---|
+| `nv_set_admission_state` | traffic-affecting; deny/protect blocks every deployment cluster-wide |
+| `nv_create_admission_rule` | traffic-affecting, not object creation — a new deny rule is live the instant it is stored (justification kept as a comment on `MUTATING`) |
+| `nv_update_admission_rule` | traffic-affecting; whole-rule replacement widens or removes enforcement immediately |
+| `nv_delete_admission_rule` | data-destroying and traffic-affecting; deleting an exception rule starts rejecting workloads |
+
+`idempotentHint=False` on all four.
+
+## 5. BLOCKED
+
+None new. The one pre-existing item I inherited and followed exactly: **`BLOCKED (schema)` — `RESTAdmissionConfigData.k8s_env` is marked required but is not sent.** `nv_set_admission_state` sends only `{"state": {...}}` with the fields the caller set; `k8s_env`, `admission_options`, `admission_custom_criteria_options`, `admission_custom_criteria_templates` and `predefined_risky_roles` are all omitted. `test_set_admission_state_omits_unset_fields` asserts the body is exactly `{"state": {"enable": True}}`.
+
+## Things for you to action (files I was told not to touch)
+
+- **`server.py` registration is still missing.** Line 21 needs `admission` added to `from .tools import inventory, policy_write`, and line 120's `for module in (inventory, policy_write):` needs `admission`. Until then `make spec` will not see the 4 tools.
+- **`AdmissionCriterionInput` is not yet in `models.py`**, so `import neuvector_mcp.tools.admission` currently raises `ImportError`. Expected — it lands with Phase 6.
+- **Lint:** 3 `E501` remain in `admission.py`, all on the normative one-line `Calls ...` docstring lines (105/202/213 chars) which must stay unbroken for `CALLS_RE`. `compliance.py` has the same class of violation, so this looks like a repo-wide baseline decision (a `per-file-ignores` entry or an `E501` ignore) rather than something I should fix by rewording spec-verbatim text. Everything else in my two files is ruff-clean; I added one `# noqa: S608` for a false-positive SQL-injection hit on an English prose f-string.</result>
+<usage><subagent_tokens>130233</subagent_tokens><tool_uses>53</tool_uses><duration_ms>483026</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a79e30d7bd6775b35</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/a79e30d7bd6775b35.output</output-file>
+<status>completed</status>
+<summary>Agent "Build vulnerability toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Everything below was validated in a throwaway sandbox copy (repo files untouched): **27/27 tests pass**, mypy `--strict` clean on both new files, and `verify_spec.py` reports **7 tools introspected, R1–R8 zero violations** (R9 only failed because I stubbed the sibling modules in the sandbox).
+
+## 1. Models to append to `models.py`
+
+No new imports needed — `Any`, `Literal`, `BaseModel`, `Field`, `_BASE`, `Page`, `Severity` are all already in the file. Verbatim from PART-A A.0.4 + the `vulnerability` section, in PART-A order.
+
+&gt; Two notes for the merge: (a) the A.0.4 helper block (`SEVERITY_RANK`, `normalise_severity`, `severity_rank`, `count_by_level`) is **shared with Phase 4** — append it once; `count_by_level` is unused by my toolset. (b) `_BASE` *is* `ConfigDict(extra="ignore", frozen=True)`, already defined at the top of `models.py`.
+
+```python
+# --- shared helpers (A.0.4) --------------------------------------------------
+
+#: Ranking used to sort and threshold vulnerability severities. Controller
+#: ``severity`` strings are free-form (Appendix B declares no enum), so unknown
+#: values rank 0 and normalise to "".
+SEVERITY_RANK: dict[str, int] = {
+    "critical": 4,
+    "high": 3,
+    "medium": 2,
+    "low": 1,
+    "info": 0,
+    "": 0,
+}
+
+
+def normalise_severity(value: Any) -&gt; Severity:
+    """Map any controller severity string onto the ``Severity`` literal."""
+    text = str(value or "").strip().lower()
+    for canonical in ("Critical", "High", "Medium", "Low", "Info"):
+        if text == canonical.lower():
+            return canonical  # type: ignore[return-value]
+    return ""
+
+
+def severity_rank(value: Any) -&gt; int:
+    """Numeric rank of a controller severity string; unknown values rank 0."""
+    return SEVERITY_RANK.get(str(value or "").strip().lower(), 0)
+
+
+def count_by_level(items: list[dict[str, Any]]) -&gt; dict[str, int]:
+    """Count CIS/compliance check ``level`` values, e.g. {"PASS": 40, "WARN": 7}.
+
+    ``level`` is a free-form string in Appendix B (``RESTBenchItem.level``); keys
+    are the controller's own values, upper-cased, with "" for a missing level.
+    """
+    counts: dict[str, int] = {}
+    for item in items:
+        key = str(item.get("level", "") or "").upper()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+# --- vulnerability toolset (Phase 3) -----------------------------------------
+
+
+class ImageScanSummary(BaseModel):
+    """Scan summary for one image."""
+
+    model_config = _BASE
+
+    image: str = Field(description="Image reference as the controller recorded it.")
+    image_id: str = Field(
+        default="", description="Image id; pass to nv_get_scan_report with target='image'."
+    )
+    status: str = Field(default="", description="Scan status, e.g. finished, scanning or unscanned.")
+    result: str = Field(default="", description="Scanner result string; non-empty on failure.")
+    high_vuls: int = Field(default=0, description="High-severity vulnerability count.")
+    med_vuls: int = Field(default=0, description="Medium-severity vulnerability count.")
+    base_os: str = Field(default="", description="Base OS the scanner detected.")
+    author: str = Field(default="", description="Image author, when the image records one.")
+    scanned_at: str = Field(default="", description="When this image was last scanned.")
+    scanner_version: str = Field(default="", description="Scanner build that produced the result.")
+    cvedb_create_time: str = Field(
+        default="", description="Vulnerability database timestamp used; old means the result is stale."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; "ImageScanSummary":
+        """Project a ``RESTScanImageSummary``."""
+        return cls(
+            image=str(raw.get("image", "") or ""),
+            image_id=str(raw.get("image_id", "") or ""),
+            status=str(raw.get("status", "") or ""),
+            result=str(raw.get("result", "") or ""),
+            high_vuls=int(raw.get("high") or 0),
+            med_vuls=int(raw.get("medium") or 0),
+            base_os=str(raw.get("base_os", "") or ""),
+            author=str(raw.get("author", "") or ""),
+            scanned_at=str(raw.get("scanned_at", "") or ""),
+            scanner_version=str(raw.get("scanner_version", "") or ""),
+            cvedb_create_time=str(raw.get("cvedb_create_time", "") or ""),
+        )
+
+
+class ImageScanSummaryList(BaseModel):
+    """Result of ``nv_list_image_scan_summaries``."""
+
+    model_config = _BASE
+
+    page: Page
+    images: list[ImageScanSummary]
+
+
+class VulnerabilityFinding(BaseModel):
+    """One CVE in a scan report."""
+
+    model_config = _BASE
+
+    name: str = Field(description="CVE id, e.g. CVE-2026-1234.")
+    severity: Severity = Field(default="", description="Severity as the vulnerability feed rates it.")
+    score: float = Field(default=0.0, description="CVSS v2 base score.")
+    score_v3: float = Field(default=0.0, description="CVSS v3 base score; prefer this one.")
+    package_name: str = Field(default="", description="Affected package.")
+    package_version: str = Field(default="", description="Installed version.")
+    fixed_version: str = Field(
+        default="", description="Version that fixes it; empty means no fix is available yet."
+    )
+    feed_rating: str = Field(default="", description="Rating from the vendor feed, when it differs.")
+    in_base_image: bool = Field(
+        default=False,
+        description="True when the package came from the base image, so the fix belongs to whoever "
+        "owns the base image.",
+    )
+    link: str = Field(default="", description="Advisory URL.")
+    published_timestamp: int = Field(default=0, description="Unix time the CVE was published.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; "VulnerabilityFinding":
+        """Project a ``RESTVulnerability``, dropping 'description' and CVSS vectors."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            severity=normalise_severity(raw.get("severity")),
+            score=float(raw.get("score") or 0.0),
+            score_v3=float(raw.get("score_v3") or 0.0),
+            package_name=str(raw.get("package_name", "") or ""),
+            package_version=str(raw.get("package_version", "") or ""),
+            fixed_version=str(raw.get("fixed_version", "") or ""),
+            feed_rating=str(raw.get("feed_rating", "") or ""),
+            in_base_image=bool(raw.get("in_base_image", False)),
+            link=str(raw.get("link", "") or ""),
+            published_timestamp=int(raw.get("published_timestamp") or 0),
+        )
+
+
+class SeverityCounts(BaseModel):
+    """Vulnerability counts by severity for a whole report."""
+
+    model_config = _BASE
+
+    critical: int = Field(default=0, description="Critical-severity vulnerabilities.")
+    high: int = Field(default=0, description="High-severity vulnerabilities.")
+    medium: int = Field(default=0, description="Medium-severity vulnerabilities.")
+    low: int = Field(default=0, description="Low-severity vulnerabilities.")
+    unrated: int = Field(default=0, description="Vulnerabilities the feed did not rate.")
+    total: int = Field(default=0, description="All vulnerabilities in the report.")
+    fixable: int = Field(
+        default=0, description="Vulnerabilities with a fixed version available; the actionable subset."
+    )
+
+    @classmethod
+    def from_api(cls, vulnerabilities: list[dict[str, Any]]) -&gt; "SeverityCounts":
+        """Count a raw ``RESTVulnerability`` array. The controller returns no totals."""
+        buckets = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "": 0}
+        fixable = 0
+        for vuln in vulnerabilities:
+            key = normalise_severity(vuln.get("severity"))
+            buckets[key if key in buckets else ""] += 1
+            if str(vuln.get("fixed_version", "") or ""):
+                fixable += 1
+        return cls(
+            critical=buckets["Critical"],
+            high=buckets["High"],
+            medium=buckets["Medium"],
+            low=buckets["Low"],
+            unrated=buckets[""],
+            total=len(vulnerabilities),
+            fixable=fixable,
+        )
+
+
+class ScanReport(BaseModel):
+    """Result of ``nv_get_scan_report``."""
+
+    model_config = _BASE
+
+    target: Literal["image", "workload", "host", "registry_image"] = Field(
+        description="What this report is about."
+    )
+    target_id: str = Field(description="Id that was requested.")
+    registry: str = Field(default="", description="Registry name; empty unless target='registry_image'.")
+    counts: SeverityCounts = Field(description="Counts over the WHOLE report, before any filtering.")
+    matched: int = Field(
+        default=0, description="Vulnerabilities left after min_severity and fixable_only."
+    )
+    check_count: int = Field(default=0, description="Compliance checks embedded in this report.")
+    module_count: int = Field(default=0, description="Software modules the scanner inventoried.")
+    secret_count: int = Field(default=0, description="Secrets the scanner found in the filesystem.")
+    setid_perm_count: int = Field(default=0, description="setuid/setgid binaries the scanner found.")
+    page: Page
+    vulnerabilities: list[VulnerabilityFinding] = Field(
+        default_factory=list, description="Worst-first, filtered and capped. Empty when summary_only."
+    )
+
+    @classmethod
+    def from_api(
+        cls,
+        raw: dict[str, Any],
+        *,
+        target: str,
+        target_id: str,
+        registry: str = "",
+        summary_only: bool = False,
+        min_severity: str | None = None,
+        fixable_only: bool = False,
+        max_vulnerabilities: int = 50,
+    ) -&gt; "ScanReport":
+        """Project a ``RESTScanReport``: count everything, then filter, sort and cap."""
+        all_vulns = [v for v in (raw.get("vulnerabilities") or []) if isinstance(v, dict)]
+        counts = SeverityCounts.from_api(all_vulns)
+
+        floor = severity_rank(min_severity) if min_severity else -1
+        selected = [
+            v
+            for v in all_vulns
+            if severity_rank(v.get("severity")) &gt;= floor
+            and (not fixable_only or str(v.get("fixed_version", "") or ""))
+        ]
+        selected.sort(
+            key=lambda v: (
+                -severity_rank(v.get("severity")),
+                -float(v.get("score_v3") or 0.0),
+                -float(v.get("score") or 0.0),
+                str(v.get("name", "") or ""),
+            )
+        )
+        shown = [] if summary_only else selected[:max_vulnerabilities]
+        truncated = len(selected) &gt; len(shown)
+        return cls(
+            target=target,  # type: ignore[arg-type]
+            target_id=target_id,
+            registry=registry,
+            counts=counts,
+            matched=len(selected),
+            check_count=len(raw.get("checks") or []),
+            module_count=len(raw.get("modules") or []),
+            secret_count=len(raw.get("secrets") or []),
+            setid_perm_count=len(raw.get("setid_perms") or []),
+            page=Page(
+                start=0,
+                returned=len(shown),
+                truncated=truncated,
+                hint=(
+                    (
+                        f"{len(selected)} vulnerabilities matched; {len(shown)} returned. "
+                        "Raise max_severity coverage with min_severity, set fixable_only=true, "
+                        "or raise max_vulnerabilities."
+                    )
+                    if truncated
+                    else None
+                ),
+            ),
+            vulnerabilities=[VulnerabilityFinding.from_api(v) for v in shown],
+        )
+
+
+class ScanStatus(BaseModel):
+    """Result of ``nv_get_scan_status``."""
+
+    model_config = _BASE
+
+    scanned: int = Field(default=0, description="Assets scanned successfully.")
+    scheduled: int = Field(default=0, description="Assets queued for scanning.")
+    scanning: int = Field(default=0, description="Assets being scanned right now.")
+    failed: int = Field(default=0, description="Assets whose scan failed; these have no data.")
+    cvedb_version: str = Field(default="", description="Vulnerability database version.")
+    cvedb_create_time: str = Field(
+        default="", description="When that database was built. Old means every count is stale."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; "ScanStatus":
+        """Project a ``RESTScanStatus``, accepting the wrapped or unwrapped body."""
+        s = raw.get("status") or raw
+        return cls(
+            scanned=int(s.get("scanned") or 0),
+            scheduled=int(s.get("scheduled") or 0),
+            scanning=int(s.get("scanning") or 0),
+            failed=int(s.get("failed") or 0),
+            cvedb_version=str(s.get("cvedb_version", "") or ""),
+            cvedb_create_time=str(s.get("cvedb_create_time", "") or ""),
+        )
+
+
+class ScannerBrief(BaseModel):
+    """One scanner instance. Best-effort projection."""
+
+    model_config = _BASE
+
+    id: str = Field(default="", description="Scanner id.")
+    cvedb_version: str = Field(default="", description="Vulnerability database version it carries.")
+    cvedb_create_time: str = Field(default="", description="When that database was built.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; "ScannerBrief":
+        """Best-effort projection: ``RESTScannerData`` has no Appendix B entry.
+
+        Only keys whose names are corroborated elsewhere in Appendix B are read
+        (``cvedb_version`` and ``cvedb_create_time`` from ``RESTScanStatus``), each
+        with a default, so an unexpected shape yields empty fields, never an error.
+        """
+        return cls(
+            id=str(raw.get("id", "") or ""),
+            cvedb_version=str(raw.get("cvedb_version", "") or ""),
+            cvedb_create_time=str(raw.get("cvedb_create_time", "") or ""),
+        )
+
+
+class ScannerList(BaseModel):
+    """Result of ``nv_list_scanners``."""
+
+    model_config = _BASE
+
+    page: Page
+    scanners: list[ScannerBrief]
+
+
+class RegistrySummary(BaseModel):
+    """One configured registry. Credential fields are deliberately absent."""
+
+    model_config = _BASE
+
+    name: str = Field(description="Registry name; pass to nv_list_registry_images.")
+    registry_type: str = Field(default="", description="Registry type, e.g. Docker Registry or Amazon ECR.")
+    registry: str = Field(default="", description="Registry URL.")
+    username: str = Field(default="", description="Configured username; empty for anonymous access.")
+    filters: list[str] = Field(
+        default_factory=list, description="Repository/tag patterns this registry scans."
+    )
+    status: str = Field(default="", description="Scan status, e.g. idle or scanning.")
+    error_message: str = Field(
+        default="", description="Non-empty when the last scan failed; its images have no data."
+    )
+    scanned: int = Field(default=0, description="Images scanned successfully.")
+    scheduled: int = Field(default=0, description="Images queued.")
+    scanning: int = Field(default=0, description="Images being scanned now.")
+    failed: int = Field(default=0, description="Images whose scan failed.")
+    scan_layers: bool = Field(default=False, description="True when per-layer scanning is enabled.")
+    rescan_after_db_update: bool = Field(
+        default=False, description="True when images are rescanned after a database update."
+    )
+    repo_limit: int = Field(default=0, description="Maximum repositories scanned; 0 means no limit.")
+    tag_limit: int = Field(default=0, description="Maximum tags per repository; 0 means no limit.")
+    started_at: str = Field(default="", description="When the current or last scan started.")
+    cvedb_version: str = Field(default="", description="Vulnerability database version used.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; "RegistrySummary":
+        """Project a ``RESTRegistrySummary``, dropping every credential field."""
+        return cls(
+            name=str(raw.get("name", "")),
+            registry_type=str(raw.get("registry_type", "") or ""),
+            registry=str(raw.get("registry", "") or ""),
+            username=str(raw.get("username", "") or ""),
+            filters=[str(f) for f in (raw.get("filters") or [])],
+            status=str(raw.get("status", "") or ""),
+            error_message=str(raw.get("error_message", "") or ""),
+            scanned=int(raw.get("scanned") or 0),
+            scheduled=int(raw.get("scheduled") or 0),
+            scanning=int(raw.get("scanning") or 0),
+            failed=int(raw.get("failed") or 0),
+            scan_layers=bool(raw.get("scan_layers", False)),
+            rescan_after_db_update=bool(raw.get("rescan_after_db_update", False)),
+            repo_limit=int(raw.get("repo_limit") or 0),
+            tag_limit=int(raw.get("tag_limit") or 0),
+            started_at=str(raw.get("started_at", "") or ""),
+            cvedb_version=str(raw.get("cvedb_version", "") or ""),
+        )
+
+
+class RegistryList(BaseModel):
+    """Result of ``nv_list_registries``."""
+
+    model_config = _BASE
+
+    page: Page
+    registries: list[RegistrySummary]
+
+
+class RegistryImageSummary(BaseModel):
+    """One image in a registry."""
+
+    model_config = _BASE
+
+    repository: str = Field(description="Repository path within the registry.")
+    tag: str = Field(default="", description="Image tag.")
+    image_id: str = Field(
+        default="",
+        description="Image id; pass to nv_get_scan_report with target='registry_image'.",
+    )
+    digest: str = Field(default="", description="Image digest.")
+    namespace: str = Field(default="", description="Registry namespace or project (controller field 'domain').")
+    status: str = Field(default="", description="Scan status, e.g. finished.")
+    result: str = Field(default="", description="Scanner result string; non-empty on failure.")
+    high_vuls: int = Field(default=0, description="High-severity vulnerability count.")
+    med_vuls: int = Field(default=0, description="Medium-severity vulnerability count.")
+    base_os: str = Field(default="", description="Base OS the scanner detected.")
+    size_bytes: int = Field(default=0, description="Image size in bytes.")
+    run_as_root: bool = Field(default=False, description="True when the image's default user is root.")
+    scanned_at: str = Field(default="", description="When this image was last scanned.")
+    created_at: str = Field(default="", description="When the image was built.")
+    scanner_version: str = Field(default="", description="Scanner build that produced the result.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; "RegistryImageSummary":
+        """Project a ``RESTRegistryImageSummary``."""
+        return cls(
+            repository=str(raw.get("repository", "") or ""),
+            tag=str(raw.get("tag", "") or ""),
+            image_id=str(raw.get("image_id", "") or ""),
+            digest=str(raw.get("digest", "") or ""),
+            namespace=str(raw.get("domain", "") or ""),
+            status=str(raw.get("status", "") or ""),
+            result=str(raw.get("result", "") or ""),
+            high_vuls=int(raw.get("high") or 0),
+            med_vuls=int(raw.get("medium") or 0),
+            base_os=str(raw.get("base_os", "") or ""),
+            size_bytes=int(raw.get("size") or 0),
+            run_as_root=bool(raw.get("run_as_root", False)),
+            scanned_at=str(raw.get("scanned_at", "") or ""),
+            created_at=str(raw.get("created_at", "") or ""),
+            scanner_version=str(raw.get("scanner_version", "") or ""),
+        )
+
+
+class RegistryImageList(BaseModel):
+    """Result of ``nv_list_registry_images``."""
+
+    model_config = _BASE
+
+    page: Page
+    registry: str = Field(description="Registry these images came from.")
+    images: list[RegistryImageSummary]
+
+
+class VulnerabilityProfileEntry(BaseModel):
+    """One vulnerability exception."""
+
+    model_config = _BASE
+
+    id: int = Field(default=0, description="Entry id, unique within the profile.")
+    name: str = Field(default="", description="CVE id this entry suppresses, or 'any'.")
+    comment: str = Field(default="", description="Why the exception exists.")
+    days: int = Field(
+        default=0,
+        description="Grace period in days for a CVE with no fix available. 0 means the exception "
+        "always applies.",
+    )
+    namespaces: list[str] = Field(
+        default_factory=list,
+        description="Namespaces the exception is limited to (controller field 'domains'); empty means "
+        "cluster-wide.",
+    )
+    images: list[str] = Field(
+        default_factory=list,
+        description="Image patterns the exception is limited to; empty means every image.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; "VulnerabilityProfileEntry":
+        """Project a ``RESTVulnerabilityProfileEntry``."""
+        return cls(
+            id=int(raw.get("id") or 0),
+            name=str(raw.get("name", "") or ""),
+            comment=str(raw.get("comment", "") or ""),
+            days=int(raw.get("days") or 0),
+            namespaces=[str(d) for d in (raw.get("domains") or [])],
+            images=[str(i) for i in (raw.get("images") or [])],
+        )
+
+
+class VulnerabilityProfile(BaseModel):
+    """Result of ``nv_get_vulnerability_profile``."""
+
+    model_config = _BASE
+
+    name: str = Field(description="Profile name.")
+    cfg_type: str = Field(
+        default="",
+        description="user_created | ground. 'ground' profiles come from a CRD and are overwritten by "
+        "the CRD controller.",
+    )
+    entry_count: int = Field(default=0, description="True number of entries, before max_entries.")
+    page: Page
+    entries: list[VulnerabilityProfileEntry] = Field(
+        default_factory=list, description="Exception entries, capped by max_entries."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any], *, max_entries: int = 100) -&gt; "VulnerabilityProfile":
+        """Project a ``RESTVulnerabilityProfile``, capping the entry list."""
+        entries = [e for e in (raw.get("entries") or []) if isinstance(e, dict)]
+        shown = entries[:max_entries]
+        return cls(
+            name=str(raw.get("name", "")),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            entry_count=len(entries),
+            page=Page(
+                start=0,
+                returned=len(shown),
+                truncated=len(entries) &gt; len(shown),
+                hint=(
+                    f"{len(entries)} entries exist; {len(shown)} shown. Raise max_entries."
+                    if len(entries) &gt; len(shown)
+                    else None
+                ),
+            ),
+            entries=[VulnerabilityProfileEntry.from_api(e) for e in shown],
+        )
+```
+
+**Lint note (verbatim-vs-`ruff check` tension, your call at merge time):** PART-A's model source is not ruff-clean under this repo's config. My block adds 26 findings — 12 × `UP037` (quoted return annotations, auto-fixable) and 14 × `E501` (&gt;100 cols). This is pre-existing style: today's `models.py` already fails the same way at 3 sites (lines 52, 60, 106), so `make lint` is red before my change. `ruff check --fix` clears every UP037; the E501s need reflowing. None of this touches a `description=` string. **`mypy --strict` on the block is clean.**
+
+## 2. Fixture files written
+
+| File | Envelope key |
+|---|---|
+| `tests/fixtures/scan_image_summaries.json` | `images` (4 items) |
+| `tests/fixtures/scan_report.json` | `report` (**14 CVEs**: 3 Critical / 4 High / 4 Medium / 2 Low / 1 unrated `"Negligible"`, 8 fixable; plus `checks`, `modules`, `secrets`, `setid_perms`) |
+| `tests/fixtures/scan_status.json` | `status` |
+| `tests/fixtures/scanners.json` | `scanners` (3 items, normative — `RESTScannerData` absent from Appendix B) |
+| `tests/fixtures/registries.json` | `summarys` (3 items; carries `password` + `auth_token` values the test asserts never surface) |
+| `tests/fixtures/registry_images.json` | `images` (4 items) |
+| `tests/fixtures/vulnerability_profile.json` | `profile` (4 entries) |
+
+## 3. `Calls` lines used (10 across 7 tools)
+
+```
+Calls GET /v1/scan/image with f_image, f_status, f_high and s_high.
+Calls GET /v1/scan/image/{id} with target='image'.
+Calls GET /v1/scan/workload/{id} with target='workload'.
+Calls GET /v1/scan/host/{id} with target='host'.
+Calls GET /v1/scan/registry/{name}/image/{id} with target='registry_image'.
+Calls GET /v1/scan/status.
+Calls GET /v1/scan/scanner.
+Calls GET /v1/scan/registry with f_name, f_status and scope.
+Calls GET /v1/scan/registry/{name}/images with f_repository, f_tag, f_status and f_high.
+Calls GET /v1/vulnerability/profile/{name}.
+```
+
+All 10 resolve against `spec_endpoints.json` — R6 passed in the sandbox run.
+
+## 4. BLOCKED
+
+**None.** The one schema gap (`RESTScannerData` missing from Appendix B) is already recorded in PART-A with a prescribed best-effort three-field projection, so it is not a new blocker — I did not widen it beyond `id`, `cvedb_version`, `cvedb_create_time`, and `tests/fixtures/scanners.json` stands as the normative shape.
+
+## What you still need to do centrally
+
+1. Append the models above to `models.py` (dedupe the A.0.4 helper block against Phase 4).
+2. Add `vulnerability` to the `from .tools import ...` line and the `for module in (...)` tuple in `server.py` (currently `(inventory, policy_write)` at line 120).
+
+One design note worth flagging: `nv_get_scan_report` deliberately sends **zero** query parameters — the controller honours no filter on those four routes, so `min_severity` / `fixable_only` / `max_vulnerabilities` are all applied in `ScanReport.from_api` after the fetch, with `counts` computed over the *whole* report before filtering and `matched` reporting the filtered size. `test_get_scan_report_severity_filter_applied_client_side` asserts the empty query string explicitly so a future "optimisation" that pushes filters upstream fails loudly.</result>
+<usage><subagent_tokens>136799</subagent_tokens><tool_uses>46</tool_uses><duration_ms>634962</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0e796f38a335b492</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/a0e796f38a335b492.output</output-file>
+<status>completed</status>
+<summary>Agent "Build policy_read toolset" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Module, tests, and fixtures are on disk; ruff passes on both new files; every `from_api()` was exercised against the real fixture bytes in a standalone harness before hand-off.
+
+## 1. Model classes to append to `models.py`
+
+No new imports are required — `Any`, `BaseModel`, `ConfigDict`, `Field`, `_BASE`, `PolicyMode`, `Page` and `_clip` (Phase 5) all already exist or are already imported.
+
+```python
+class NetworkRule(BaseModel):
+    """One network policy rule."""
+
+    model_config = _BASE
+
+    id: int = Field(
+        description="Rule id; pass to nv_get_network_rule or nv_delete_network_rule."
+    )
+    order: int = Field(
+        default=0,
+        description="Zero-based position in the controller's evaluation order, counted from the "
+        "start of the whole list, not of this page. Lower wins.",
+    )
+    from_group: str = Field(default="", description="Source group name (controller field 'from').")
+    to_group: str = Field(
+        default="", description="Destination group name (controller field 'to')."
+    )
+    ports: str = Field(
+        default="",
+        description="Free-form port list the rule matches, e.g. 'tcp/443,udp/53'.",
+    )
+    applications: list[str] = Field(
+        default_factory=list,
+        description="Application protocols the rule matches; empty means any.",
+    )
+    action: str = Field(default="", description="allow or deny.")
+    learned: bool = Field(
+        default=False,
+        description="True when NeuVector inferred this rule in Discover mode.",
+    )
+    disable: bool = Field(
+        default=False, description="True when the rule is present but not enforced."
+    )
+    cfg_type: str = Field(
+        default="",
+        description="Provenance: learned | user_created | ground (Kubernetes CRD) | federal "
+        "(pushed by a federation primary). Federal and ground rules are read-only here.",
+    )
+    priority: int = Field(
+        default=0, description="Controller ordering weight; lower is evaluated earlier."
+    )
+    match_counter: int = Field(
+        default=0,
+        description="How many times the rule has matched since it was created.",
+    )
+    last_match_timestamp: int = Field(
+        default=0, description="Unix epoch seconds of the last match, 0 if never."
+    )
+    created_timestamp: int = Field(
+        default=0, description="Unix epoch seconds the rule was created."
+    )
+    last_modified_timestamp: int = Field(
+        default=0, description="Unix epoch seconds the rule was last changed."
+    )
+    comment: str = Field(default="", description="Operator comment, clipped to 500 characters.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any], *, order: int = 0) -&gt; NetworkRule:
+        """Project a ``RESTPolicyRule``.
+
+        ``from`` and ``to`` are Python keywords, so they are read by string key
+        and exposed as ``from_group`` / ``to_group``.
+        """
+        return cls(
+            id=int(raw.get("id") or 0),
+            order=order,
+            from_group=str(raw.get("from", "") or ""),
+            to_group=str(raw.get("to", "") or ""),
+            ports=str(raw.get("ports", "") or ""),
+            applications=[str(a) for a in (raw.get("applications") or [])],
+            action=str(raw.get("action", "") or ""),
+            learned=bool(raw.get("learned", False)),
+            disable=bool(raw.get("disable", False)),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            priority=int(raw.get("priority") or 0),
+            match_counter=int(raw.get("match_counter") or 0),
+            last_match_timestamp=int(raw.get("last_match_timestamp") or 0),
+            created_timestamp=int(raw.get("created_timestamp") or 0),
+            last_modified_timestamp=int(raw.get("last_modified_timestamp") or 0),
+            comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
+        )
+
+
+class NetworkRuleList(BaseModel):
+    """Result of ``nv_list_network_rules``."""
+
+    model_config = _BASE
+
+    page: Page
+    scope: str = Field(
+        default="local", description="Scope the rules were read from: local or fed."
+    )
+    rules: list[NetworkRule]
+
+
+class ProcessProfileEntry(BaseModel):
+    """One allowed (or explicitly denied) process in a group's profile."""
+
+    model_config = _BASE
+
+    name: str = Field(description="Process name as the enforcer sees it.")
+    path: str = Field(default="", description="Absolute executable path; empty means any path.")
+    user: str = Field(
+        default="",
+        description="User the process is expected to run as; empty means any.",
+    )
+    uid: int = Field(default=0, description="Expected uid; 0 when unset rather than meaning root.")
+    action: str = Field(default="", description="allow or deny.")
+    cfg_type: str = Field(
+        default="",
+        description="Provenance: learned | user_created | ground | federal | system_defined.",
+    )
+    uuid: str = Field(
+        default="",
+        description="Entry uuid; the handle for updates through nv_update_process_profile.",
+    )
+    group: str = Field(
+        default="",
+        description="Group the entry belongs to, set when inherited from another group.",
+    )
+    created_timestamp: int = Field(
+        default=0, description="Unix epoch seconds the entry was created."
+    )
+    last_modified_timestamp: int = Field(
+        default=0, description="Unix epoch seconds the entry was last changed."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; ProcessProfileEntry:
+        """Project a ``RESTProcessProfileEntry``."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            path=str(raw.get("path", "") or ""),
+            user=str(raw.get("user", "") or ""),
+            uid=int(raw.get("uid") or 0),
+            action=str(raw.get("action", "") or ""),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            uuid=str(raw.get("uuid", "") or ""),
+            group=str(raw.get("group", "") or ""),
+            created_timestamp=int(raw.get("created_timestamp") or 0),
+            last_modified_timestamp=int(raw.get("last_modified_timestamp") or 0),
+        )
+
+
+class ProcessProfile(BaseModel):
+    """Result of ``nv_get_process_profile``."""
+
+    model_config = _BASE
+
+    group: str = Field(description="Group this profile belongs to.")
+    mode: PolicyMode = Field(
+        default="", description="Enforcement mode: Discover, Monitor or Protect."
+    )
+    alert_disabled: bool = Field(
+        default=False, description="True when profile violations do not raise alerts."
+    )
+    hash_enabled: bool = Field(
+        default=False,
+        description="True when executable hashes are verified as well as paths.",
+    )
+    entries_total: int = Field(
+        default=0, description="Entries the controller returned, before the max_entries cap."
+    )
+    entries_truncated: bool = Field(
+        default=False,
+        description="True when entries were dropped by max_entries. Raise max_entries to see "
+        "the rest.",
+    )
+    entries: list[ProcessProfileEntry]
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any], *, max_entries: int = 100) -&gt; ProcessProfile:
+        """Project a ``RESTProcessProfile``, capping ``process_list`` client-side."""
+        items = list(raw.get("process_list") or [])
+        kept = items[:max_entries]
+        return cls(
+            group=str(raw.get("group", "") or ""),
+            mode=str(raw.get("mode", "") or ""),  # type: ignore[arg-type]
+            alert_disabled=bool(raw.get("alert_disabled", False)),
+            hash_enabled=bool(raw.get("hash_enabled", False)),
+            entries_total=len(items),
+            entries_truncated=len(items) &gt; len(kept),
+            entries=[ProcessProfileEntry.from_api(i) for i in kept],
+        )
+
+
+class FileMonitorFilter(BaseModel):
+    """One watched path pattern."""
+
+    model_config = _BASE
+
+    filter: str = Field(default="", description="Path or glob being watched.")
+    recursive: bool = Field(
+        default=False, description="True when subdirectories are watched too."
+    )
+    behavior: bool | str = Field(
+        default="",
+        description="What the enforcer does on a hit, verbatim as the controller reports it "
+        "(monitor or block).",
+    )
+    applications: list[str] = Field(
+        default_factory=list,
+        description="Processes the filter is scoped to; empty means any process.",
+    )
+    group: str = Field(default="", description="Group the filter was inherited from, when set.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; FileMonitorFilter:
+        """Project one filter entry. Names shared with ``RESTFileMonitorFilterConfig``."""
+        return cls(
+            filter=str(raw.get("filter", "") or ""),
+            recursive=bool(raw.get("recursive", False)),
+            behavior=str(raw.get("behavior", "") or ""),
+            applications=[str(a) for a in (raw.get("applications") or [])],
+            group=str(raw.get("group", "") or ""),
+        )
+
+
+class FileMonitorProfile(BaseModel):
+    """Result of ``nv_get_file_monitor_profile``.
+
+    ``RESTFileMonitorFile`` is absent from Appendix B, so the only field names
+    read are the five that Appendix B documents on
+    ``RESTFileMonitorFilterConfig``, all through ``.get()`` with defaults.
+    """
+
+    model_config = _BASE
+
+    group: str = Field(description="Group this profile belongs to, echoed from the request.")
+    filters_total: int = Field(
+        default=0, description="Filters the controller returned, before the cap."
+    )
+    filters_truncated: bool = Field(
+        default=False, description="True when filters were dropped by max_filters."
+    )
+    envelope_keys: list[str] = Field(
+        default_factory=list,
+        description="Top-level keys the controller returned. Diagnostic: this response shape is "
+        "not documented in the schema reference.",
+    )
+    filters: list[FileMonitorFilter]
+
+    @classmethod
+    def from_api(
+        cls, raw: dict[str, Any], *, group_name: str, max_filters: int = 100
+    ) -&gt; FileMonitorProfile:
+        """Locate the filter list defensively, then project up to ``max_filters``.
+
+        Preference order for the list: ``filters``, then ``profile.filters``,
+        then the first list-valued top-level key.
+        """
+        items: list[Any] = []
+        if isinstance(raw.get("filters"), list):
+            items = list(raw["filters"])
+        elif isinstance(raw.get("profile"), dict) and isinstance(
+            raw["profile"].get("filters"), list
+        ):
+            items = list(raw["profile"]["filters"])
+        else:
+            for value in raw.values():
+                if isinstance(value, list):
+                    items = list(value)
+                    break
+        kept = [i for i in items[:max_filters] if isinstance(i, dict)]
+        return cls(
+            group=group_name,
+            filters_total=len(items),
+            filters_truncated=len(items) &gt; max_filters,
+            envelope_keys=sorted(raw.keys()),
+            filters=[FileMonitorFilter.from_api(i) for i in kept],
+        )
+
+
+class ResponseRule(BaseModel):
+    """One response rule."""
+
+    model_config = _BASE
+
+    id: int = Field(description="Rule id.")
+    order: int = Field(
+        default=0, description="Zero-based absolute position in evaluation order."
+    )
+    event: str = Field(default="", description="Event type that triggers the rule.")
+    group: str = Field(
+        default="", description="Group the rule is scoped to; empty means cluster-wide."
+    )
+    actions: list[str] = Field(
+        default_factory=list,
+        description="What the controller does when the rule matches, e.g. suppress log, "
+        "quarantine, webhook.",
+    )
+    webhooks: list[str] = Field(
+        default_factory=list,
+        description="Names of configured webhook targets to notify. Names only, never URLs.",
+    )
+    conditions: list[str] = Field(
+        default_factory=list,
+        description="Extra match conditions rendered as 'type=value' strings.",
+    )
+    disable: bool = Field(
+        default=False, description="True when the rule is present but inactive."
+    )
+    cfg_type: str = Field(
+        default="", description="Provenance: user_created | ground | federal."
+    )
+    comment: str = Field(default="", description="Operator comment, clipped to 500 characters.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any], *, order: int = 0) -&gt; ResponseRule:
+        """Project a ``RESTResponseRule``; conditions flatten ``RESTCLUSEventCondition``."""
+        conditions = [
+            f"{c.get('type', '') or ''!s}={c.get('value', '') or ''!s}"
+            for c in (raw.get("conditions") or [])
+            if isinstance(c, dict)
+        ]
+        return cls(
+            id=int(raw.get("id") or 0),
+            order=order,
+            event=str(raw.get("event", "") or ""),
+            group=str(raw.get("group", "") or ""),
+            actions=[str(a) for a in (raw.get("actions") or [])],
+            webhooks=[str(w) for w in (raw.get("webhooks") or [])],
+            conditions=conditions,
+            disable=bool(raw.get("disable", False)),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
+        )
+
+
+class ResponseRuleList(BaseModel):
+    """Result of ``nv_list_response_rules``."""
+
+    model_config = _BASE
+
+    page: Page
+    scope: str = Field(
+        default="local", description="Scope the rules were read from: local or fed."
+    )
+    rules: list[ResponseRule]
+
+
+class SensorBrief(BaseModel):
+    """One DLP or WAF sensor, name-level only.
+
+    Appendix B contains neither ``RESTDlpSensor`` nor ``RESTWafSensor``, so this
+    projection asserts only ``name`` and ``comment`` and derives every other
+    value with ``.get()`` defaults.
+    """
+
+    model_config = _BASE
+
+    name: str = Field(
+        default="", description="Sensor name; matches the 'sensor' field on threat events."
+    )
+    comment: str = Field(default="", description="Operator comment, clipped to 500 characters.")
+    rule_count: int = Field(
+        default=0,
+        description="Number of pattern rules the sensor carries, 0 when the controller did not "
+        "report a rule list. Rule bodies are never returned.",
+    )
+    predefined: bool = Field(
+        default=False,
+        description="True when the sensor ships with NeuVector rather than being user-defined.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; SensorBrief:
+        """Project a sensor entry defensively; unknown keys are ignored."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
+            rule_count=len(raw.get("rules") or []),
+            predefined=bool(raw.get("predefined", False)),
+        )
+
+
+class DlpSensorList(BaseModel):
+    """Result of ``nv_list_dlp_sensors``."""
+
+    model_config = _BASE
+
+    page: Page
+    sensors: list[SensorBrief]
+
+
+class WafSensorList(BaseModel):
+    """Result of ``nv_list_waf_sensors``."""
+
+    model_config = _BASE
+
+    page: Page
+    scope: str = Field(
+        default="local", description="Scope the sensors were read from: local or fed."
+    )
+    sensors: list[SensorBrief]
+
+
+class AdmissionState(BaseModel):
+    """Result of ``nv_get_admission_state``."""
+
+    model_config = _BASE
+
+    enable: bool = Field(default=False, description="True when the admission webhook is active.")
+    mode: str = Field(
+        default="",
+        description="monitor logs would-be denials, protect actually denies requests.",
+    )
+    default_action: str = Field(
+        default="", description="What happens to a request that no rule matches."
+    )
+    adm_client_mode: str = Field(
+        default="", description="How the controller reaches the Kubernetes API server."
+    )
+    adm_svc_type: str = Field(
+        default="", description="Service type backing the admission webhook."
+    )
+    k8s_env: bool = Field(
+        default=False,
+        description="True when the controller detected Kubernetes. False means admission control "
+        "is unavailable and mutations return controller code 30.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; AdmissionState:
+        """Project ``RESTAdmissionConfigData``: top-level ``k8s_env`` plus ``state``."""
+        state = raw.get("state") or {}
+        return cls(
+            enable=bool(state.get("enable", False)),
+            mode=str(state.get("mode", "") or ""),
+            default_action=str(state.get("default_action", "") or ""),
+            adm_client_mode=str(state.get("adm_client_mode", "") or ""),
+            adm_svc_type=str(state.get("adm_svc_type", "") or ""),
+            k8s_env=bool(raw.get("k8s_env", False)),
+        )
+
+
+def _flatten_criterion(raw: dict[str, Any]) -&gt; str:
+    """Render a ``RESTAdmRuleCriterion`` as 'name op value', with sub-criteria inline."""
+    name = str(raw.get("name", "") or "")
+    op = str(raw.get("op", "") or "")
+    value = str(raw.get("value", "") or "")
+    base = f"{name} {op} {value}".strip()
+    subs = [_flatten_criterion(s) for s in (raw.get("sub_criteria") or []) if isinstance(s, dict)]
+    return f"{base} (sub: {'; '.join(subs)})" if subs else base
+
+
+class AdmissionRule(BaseModel):
+    """One admission control rule."""
+
+    model_config = _BASE
+
+    id: int = Field(
+        description="Rule id; pass to nv_update_admission_rule or nv_delete_admission_rule."
+    )
+    category: str = Field(default="", description="Rule category as the controller reports it.")
+    rule_type: str = Field(
+        default="", description="deny blocks matching deployments, exception allows them."
+    )
+    rule_mode: str = Field(
+        default="",
+        description="Per-rule override of the global admission mode: monitor, protect, or empty "
+        "to inherit.",
+    )
+    cfg_type: str = Field(
+        default="", description="Provenance: user_created | ground | federal."
+    )
+    disable: bool = Field(
+        default=False, description="True when the rule is present but not evaluated."
+    )
+    critical: bool = Field(
+        default=False,
+        description="True for built-in rules NeuVector always evaluates; these cannot be deleted.",
+    )
+    containers: list[str] = Field(
+        default_factory=list,
+        description="Which container classes the rule inspects: containers, init_containers, "
+        "ephemeral_containers.",
+    )
+    criteria: list[str] = Field(
+        default_factory=list,
+        description="Match criteria flattened to 'name op value' strings.",
+    )
+    criteria_total: int = Field(
+        default=0, description="Criteria the controller returned, before the cap."
+    )
+    criteria_truncated: bool = Field(
+        default=False, description="True when criteria were dropped by max_criteria."
+    )
+    comment: str = Field(default="", description="Operator comment, clipped to 500 characters.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any], *, max_criteria: int = 10) -&gt; AdmissionRule:
+        """Project a ``RESTAdmissionRule``."""
+        items = [c for c in (raw.get("criteria") or []) if isinstance(c, dict)]
+        kept = items[:max_criteria]
+        return cls(
+            id=int(raw.get("id") or 0),
+            category=str(raw.get("category", "") or ""),
+            rule_type=str(raw.get("rule_type", "") or ""),
+            rule_mode=str(raw.get("rule_mode", "") or ""),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            disable=bool(raw.get("disable", False)),
+            critical=bool(raw.get("critical", False)),
+            containers=[str(c) for c in (raw.get("containers") or [])],
+            criteria=[_flatten_criterion(c) for c in kept],
+            criteria_total=len(items),
+            criteria_truncated=len(items) &gt; len(kept),
+            comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
+        )
+
+
+class AdmissionRuleList(BaseModel):
+    """Result of ``nv_list_admission_rules``."""
+
+    model_config = _BASE
+
+    page: Page
+    scope: str = Field(
+        default="local", description="Scope the rules were read from: local or fed."
+    )
+    rules: list[AdmissionRule]
+
+
+class AdmissionCriterionInput(BaseModel):
+    """One criterion of the candidate rule. Mirrors RESTAdmRuleCriterion.
+
+    This is the only INPUT model in Part B, so it is the one model here that
+    does not use ``_BASE``: unknown keys are rejected rather than ignored, and
+    it carries no ``from_api`` because nothing projects a controller body into
+    it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Criterion name, e.g. 'image' or 'runAsRoot'.")
+    op: str = Field(
+        description="Comparison operator the controller defines for this criterion name."
+    )
+    value: str = Field(default="", description="Value to compare against.")
+    sub_criteria: list[AdmissionCriterionInput] = Field(
+        default_factory=list, description="Nested criteria, for names that take them."
+    )
+
+
+AdmissionCriterionInput.model_rebuild()
+
+
+class AdmissionMatchedRule(BaseModel):
+    """An existing admission rule that also matched the assessed object."""
+
+    model_config = _BASE
+
+    id: int = Field(default=0, description="Existing rule id.")
+    type: str = Field(default="", description="allow or deny.")
+    mode: str = Field(
+        default="", description="Per-rule mode: monitor or protect, empty to inherit."
+    )
+    disabled: bool = Field(
+        default=False, description="True when that rule is currently disabled."
+    )
+    rule_cfg_type: str = Field(
+        default="", description="Provenance: federal | ground | user_created."
+    )
+    container_image: str = Field(
+        default="", description="Container image in the pod that this rule matched."
+    )
+    rule_details: str = Field(
+        default="",
+        description="Controller explanation of the match, clipped to 1000 characters.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; AdmissionMatchedRule:
+        """Project a ``RESTAdmCtrlTestRuleInfo``."""
+        return cls(
+            id=int(raw.get("id") or 0),
+            type=str(raw.get("type", "") or ""),
+            mode=str(raw.get("mode", "") or ""),
+            disabled=bool(raw.get("disabled", False)),
+            rule_cfg_type=str(raw.get("rule_cfg_type", "") or ""),
+            container_image=str(raw.get("container_image", "") or ""),
+            rule_details=_clip(str(raw.get("rule_details", "") or ""), 1000)[0],
+        )
+
+
+class AdmissionAssessmentResult(BaseModel):
+    """The verdict for one cluster object."""
+
+    model_config = _BASE
+
+    index: int = Field(
+        default=0, description="Controller's index for this object within the assessment."
+    )
+    name: str = Field(default="", description="Object name.")
+    kind: str = Field(
+        default="", description="Kubernetes kind of the object, e.g. Deployment."
+    )
+    allowed: bool = Field(
+        default=False, description="False when the webhook would deny this object."
+    )
+    message: str = Field(
+        default="", description="Controller explanation, clipped to 1000 characters."
+    )
+    matched_rules: list[AdmissionMatchedRule] = Field(
+        default_factory=list, description="Existing rules that also matched this object."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -&gt; AdmissionAssessmentResult:
+        """Project a ``RESTAdmCtrlRulesTestResult``."""
+        return cls(
+            index=int(raw.get("index") or 0),
+            name=str(raw.get("name", "") or ""),
+            kind=str(raw.get("kind", "") or ""),
+            allowed=bool(raw.get("allowed", False)),
+            message=_clip(str(raw.get("message", "") or ""), 1000)[0],
+            matched_rules=[
+                AdmissionMatchedRule.from_api(m)
+                for m in (raw.get("matched_rules") or [])
+                if isinstance(m, dict)
+            ],
+        )
+
+
+class AdmissionAssessment(BaseModel):
+    """Result of ``nv_assess_admission_rule``. Nothing was changed to produce it."""
+
+    model_config = _BASE
+
+    global_mode: str = Field(
+        default="",
+        description="Cluster admission mode at assessment time: monitor, protect, or empty when "
+        "disabled.",
+    )
+    props_unavailable: list[str] = Field(
+        default_factory=list,
+        description="Criterion properties the controller could not evaluate; results ignore them.",
+    )
+    results_total: int = Field(
+        default=0, description="Objects the controller assessed, before the cap."
+    )
+    results_truncated: bool = Field(
+        default=False, description="True when results were dropped by max_results."
+    )
+    denied_count: int = Field(
+        default=0, description="Returned results whose verdict was deny."
+    )
+    results: list[AdmissionAssessmentResult]
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any], *, max_results: int = 50) -&gt; AdmissionAssessment:
+        """Project a ``RESTAdmCtrlRulesTestResults`` body."""
+        items = [r for r in (raw.get("results") or []) if isinstance(r, dict)]
+        kept = [AdmissionAssessmentResult.from_api(r) for r in items[:max_results]]
+        return cls(
+            global_mode=str(raw.get("global_mode", "") or ""),
+            props_unavailable=[str(p) for p in (raw.get("props_unavailable") or [])],
+            results_total=len(items),
+            results_truncated=len(items) &gt; len(kept),
+            denied_count=sum(1 for r in kept if not r.allowed),
+            results=kept,
+        )
+```
+
+Two deliberate deviations from your framing instruction, both driven by PART-B:
+- `AdmissionCriterionInput` is an **input** model: PART-B specifies `ConfigDict(extra="forbid")` (not `_BASE`) and no `from_api()`. I kept PART-B's shape.
+- Return annotations are unquoted (`-&gt; NetworkRule:` not `-&gt; "NetworkRule":`) because `models.py` has `from __future__ import annotations` and ruff's `UP037` rejects the quoted form. FYI, `models.py` as it stands already fails `ruff check` on three pre-existing findings (E501 at line 52, UP037 at lines 60 and 106) — not mine to fix, but `make verify` will trip on them.
+
+## 2. Fixture files written
+
+`tests/fixtures/`: `policy_rules.json`, `policy_rule.json`, `process_profile.json`, `file_monitor_profile.json`, `response_rules.json`, `dlp_sensors.json`, `waf_sensors.json`, `admission_state.json`, `admission_rules.json`, `admission_assessment.json` — exactly the 10 PART-B names for policy_read, with the envelope keys it specifies. `policy_rules.json` has 3 rules (one `learned`, two `user_created`, one disabled) so truncation at `limit=2` and provenance both bite; `process_profile.json` has 3 entries; `admission_rules.json` has a rule with `sub_criteria`; `admission_assessment.json` has 3 results, 2 denied, one with `matched_rules`.
+
+## 3. `Calls` lines used
+
+```
+Calls GET /v1/policy/rule with scope, f_from, f_to, f_action and f_cfg_type.
+Calls GET /v1/policy/rule/{id}.
+Calls GET /v1/process_profile/{name}.
+Calls GET /v1/file_monitor/{name}.
+Calls GET /v1/response/rule with scope, f_event and f_group.
+Calls GET /v1/dlp/sensor with f_name.
+Calls GET /v1/waf/sensor with scope and f_name.
+Calls GET /v1/admission/state.
+Calls GET /v1/admission/rules with scope, f_rule_type, f_cfg_type and f_category.
+Calls POST /v1/assess/admission/rule with a {"config": {...}} body carrying rule_type, category, criteria, containers, rule_mode and comment.
+```
+
+All 10 resolve against `spec_endpoints.json["documented"]` (verified programmatically) and all match `verify_spec.py`'s `CALLS_RE`. The last one is reflowed from PART-B's verbatim text: the single-line form was 126 chars and would fail ruff E501 at `line-length = 100`; the reflow keeps `Calls POST /v1/assess/admission/rule with ` intact so R6 still parses it.
+
+## 4. BLOCKED
+
+No hard blockers — nothing stopped a tool from shipping. Four **partial** blocks, all already anticipated by PART-B and left as code comments in `policy_read.py` naming the missing type:
+
+- `RESTFileMonitorFile` / `RESTFileMonitorFileData` absent from Appendix B → `nv_get_file_monitor_profile` fetches the raw body via `client.request`, probes `filters` → `profile.filters` → first list-valued key, and returns `envelope_keys` for diagnosis. Only the five `RESTFileMonitorFilterConfig` field names are read.
+- `RESTDlpSensorsData` / `RESTDlpSensor` absent → envelope key `sensors` is inferred; `SensorBrief` reads only `name`, `comment`, `rules` (length only) and `predefined`.
+- `RESTWafSensorsData` / `RESTWafSensor` absent → same, shared `SensorBrief`.
+- Network-rule **id ranges** separating learned/user-created/ground/federated are not published in Appendix A or B → no id threshold is used or documented anywhere; provenance is read only from `cfg_type` and `learned`.
+
+Two more things worth flagging to you:
+- PART-B §B.0.2's model import list omits `SensorBrief`, but the normative bodies for both sensor tools call `SensorBrief.from_api`. I import it. If you are diffing imports against B.0.2, that extra name is intentional.
+- I could not import `..models`, so nothing was executed through the MCP path. I did load the model block standalone and run every `from_api()` against the actual fixture bytes; all outputs match the assertions in `tests/test_policy_read.py`. 10 tools registered, 34 tests written, `ruff check` clean on both new files.</result>
+<usage><subagent_tokens>143207</subagent_tokens><tool_uses>50</tool_uses><duration_ms>651769</duration_ms></usage>
+</task-notification>
