@@ -4,8 +4,9 @@
 project:
   name: neuvector-mcp
   repo: "darthzen/neuvector-mcp"
+  project_number: 7        # GitHub Project (v2) board
   build_through: M11       # highest milestone agents may build ($BUILD_THROUGH overrides)
-  board_status: false      # milestones only; issue state is the source of truth
+  board_status: true       # push Status to the board on start/finish
 projects: {}
 
 tooling:
@@ -21,6 +22,15 @@ tooling:
   schema_doc: SPEC.md
   # Acceptance line for `new` when no body is given.
   default_acceptance: "make verify PY=.venv/bin/python"
+
+# Model provenance. Claude Code drives the loop but delegates the code writing
+# to qwen3-coder:30b over ollama-code-mcp, which is a tool call inside the
+# session — Entire sees one claude-code session and would attribute the whole
+# diff to it. This lands the writing model on main as a `Generated-By:` trailer.
+# Override for a single run with $AGENT_GENERATED_BY (e.g. devstral2:24b).
+provenance:
+  enabled: true
+  generated_by: "qwen3-coder:30b (ollama-code-mcp)"
 
 # Session provenance: `entire enable` has already been run in this repo, so
 # re-anchor the farming session onto the squash commit after each merge.
