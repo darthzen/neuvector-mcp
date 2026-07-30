@@ -30,7 +30,7 @@ tooling:
 # Override for a single run with $AGENT_GENERATED_BY (e.g. devstral2:24b).
 provenance:
   enabled: true
-  generated_by: "qwen3-coder:30b (ollama-code-mcp)"
+  generated_by: "qwen3.6:27b-q6-precise (ollama-code-mcp)"
 
 # Session provenance: `entire enable` has already been run in this repo, so
 # re-anchor the farming session onto the squash commit after each merge.
