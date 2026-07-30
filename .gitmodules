@@ -1,0 +1,3 @@
+[submodule "build-plan/tools"]
+	path = build-plan/tools
+	url = https://github.com/darthzen/agent-build-tools

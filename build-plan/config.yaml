@@ -1,0 +1,30 @@
+# agent-build-tools config for the NeuVector MCP server build.
+# Tickets are GitHub Issues (open = to-do, closed = done); this file holds
+# project-wide config only, never ticket data.
+project:
+  name: neuvector-mcp
+  repo: "darthzen/neuvector-mcp"
+  build_through: M11       # highest milestone agents may build ($BUILD_THROUGH overrides)
+  board_status: false      # milestones only; issue state is the source of truth
+projects: {}
+
+tooling:
+  # Acceptance commands must start with one of these to be executed by verify/finish.
+  # Everything runs through `make ... PY=.venv/bin/python` so the gate always uses
+  # the project venv rather than whatever python3 the shell happens to resolve.
+  runnable: [make, python3, python, bash, sh, pytest, kubectl, podman, cd, .venv/bin/python]
+  cwd_rules: []            # every command runs at the repo root
+  # Tests live in tests/<name>.py; the toolkit auto-stages files named by a
+  # `--filter <Name>` in the body (harmless here, we list files explicitly).
+  test_path_template: "tests/{name}.py"
+  # `show` pulls cited §N sections out of this doc into the ticket context.
+  schema_doc: SPEC.md
+  # Acceptance line for `new` when no body is given.
+  default_acceptance: "make verify PY=.venv/bin/python"
+
+# Session provenance: `entire enable` has already been run in this repo, so
+# re-anchor the farming session onto the squash commit after each merge.
+entire:
+  enabled: true
+  agent: claude-code
+  amend: false
