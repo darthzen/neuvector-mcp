@@ -1,0 +1,87 @@
+{
+  "run_timestamp": 1753858800,
+  "run_at": "2026-07-30T07:00:00Z",
+  "kubernetes_cis_category": "master",
+  "kubernetes_cis_version": "cis-1.9",
+  "docker_cis_version": "cis-1.6.0",
+  "items": [
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "PASS",
+      "test_number": "K.1.1.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the API server pod specification file permissions are set to 600 or more restrictive",
+      "message": ["permissions are 600"],
+      "remediation": "chmod 600 /etc/kubernetes/manifests/kube-apiserver.yaml",
+      "group": ""
+    },
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "WARN",
+      "test_number": "K.1.2.6",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the --kubelet-certificate-authority argument is set as appropriate",
+      "message": ["--kubelet-certificate-authority is not set"],
+      "remediation": "Set --kubelet-certificate-authority on the API server.",
+      "group": ""
+    },
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "WARN",
+      "test_number": "K.4.2.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": false,
+      "description": "Ensure that the --anonymous-auth argument is set to false",
+      "message": ["anonymous-auth is true"],
+      "remediation": "Set --anonymous-auth=false in the kubelet configuration.",
+      "group": ""
+    },
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "PASS",
+      "test_number": "D.1.1.1",
+      "profile": "Level 1",
+      "scored": false,
+      "automated": false,
+      "description": "Ensure a separate partition for containers has been created",
+      "message": [],
+      "remediation": "Mount /var/lib/docker on its own partition.",
+      "group": ""
+    },
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "WARN",
+      "test_number": "D.2.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure network traffic is restricted between containers on the default bridge",
+      "message": ["icc is enabled on the default bridge"],
+      "remediation": "Run the docker daemon with --icc=false.",
+      "group": ""
+    },
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "NOTE",
+      "test_number": "D.5.4",
+      "profile": "Level 2",
+      "scored": false,
+      "automated": false,
+      "description": "Ensure that privileged containers are not used",
+      "message": ["reviewed manually"],
+      "remediation": "Do not run containers with --privileged.",
+      "group": ""
+    }
+  ]
+}

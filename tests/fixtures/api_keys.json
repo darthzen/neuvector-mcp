@@ -1,0 +1,40 @@
+{
+  "apikeys": [
+    {
+      "apikey_name": "ci-pipeline",
+      "apikey_secret": "PLANTED-APIKEY-SECRET-zzz999",
+      "description": "Used by the release pipeline to promote groups to Protect.",
+      "role": "admin",
+      "role_domains": {
+        "reader": ["prod"]
+      },
+      "expiration_type": "hours",
+      "expiration_hours": 720,
+      "expiration_timestamp": 1756492800,
+      "created_timestamp": 1753900800,
+      "created_by_entity": "admin"
+    },
+    {
+      "apikey_name": "readonly-dashboard",
+      "description": "Grafana scrape key.",
+      "role": "reader",
+      "expiration_type": "never",
+      "expiration_timestamp": 0,
+      "created_timestamp": 1750000000,
+      "created_by_entity": "admin"
+    },
+    {
+      "apikey_name": "expired-audit",
+      "description": "",
+      "role": "reader",
+      "role_domains": {},
+      "expiration_type": "hours",
+      "expiration_hours": 24,
+      "expiration_timestamp": 1700000000,
+      "created_timestamp": 1699913600,
+      "created_by_entity": "ldap-auditor"
+    }
+  ],
+  "global_roles": ["admin", "reader"],
+  "domain_roles": ["admin", "reader"]
+}

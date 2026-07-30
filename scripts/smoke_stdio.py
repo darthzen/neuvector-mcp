@@ -9,6 +9,7 @@ Usage:
     export NV_API_ACCESS_KEY=... NV_API_SECRET_KEY=... NV_VERIFY_TLS=false
     python scripts/smoke_stdio.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,10 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from fastmcp import Client  # noqa: E402
+from fastmcp import Client
 
-from neuvector_mcp.config import load_settings  # noqa: E402
-from neuvector_mcp.server import build_server  # noqa: E402
+from neuvector_mcp.config import load_settings
+from neuvector_mcp.server import build_server
 
 
 async def main() -> int:

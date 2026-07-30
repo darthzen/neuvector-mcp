@@ -1,0 +1,11 @@
+{
+  "state": {
+    "enable": true,
+    "mode": "protect",
+    "default_action": "allow",
+    "adm_client_mode": "service",
+    "adm_svc_type": "ClusterIP",
+    "ctrl_states": {}
+  },
+  "k8s_env": true
+}

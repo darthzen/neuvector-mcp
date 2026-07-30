@@ -1,0 +1,18 @@
+{
+  "filters": [
+    {
+      "filter": "/etc/passwd",
+      "recursive": false,
+      "behavior": "block",
+      "applications": [],
+      "group": "nv.api.prod"
+    },
+    {
+      "filter": "/usr/local/bin/*",
+      "recursive": true,
+      "behavior": "monitor",
+      "applications": ["python3"],
+      "group": ""
+    }
+  ]
+}

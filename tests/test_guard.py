@@ -1,13 +1,14 @@
 """Write-guard contract tests. These are the safety-critical tests."""
+
 from __future__ import annotations
 
 import json
 
 import pytest
 import respx
-from conftest import make_settings
 from fastmcp import Client
 
+from conftest import make_settings
 from neuvector_mcp.config import DEFAULT_TOOLSETS
 from neuvector_mcp.guard import confirm_token
 from neuvector_mcp.server import build_server

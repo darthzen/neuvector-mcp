@@ -1,0 +1,25 @@
+{
+  "sensors": [
+    {
+      "name": "sensor.log4shell",
+      "comment": "predefined log4j exploit patterns",
+      "predefined": true,
+      "rules": [{"name": "log4shell-jndi", "patterns": []}]
+    },
+    {
+      "name": "acme-sqli",
+      "comment": "sql injection patterns for the acme API",
+      "predefined": false,
+      "rules": [
+        {"name": "sqli-union", "patterns": []},
+        {"name": "sqli-comment", "patterns": []}
+      ]
+    },
+    {
+      "name": "acme-xss",
+      "comment": "",
+      "predefined": false,
+      "rules": []
+    }
+  ]
+}

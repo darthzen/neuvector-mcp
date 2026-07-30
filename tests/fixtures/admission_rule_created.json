@@ -1,0 +1,22 @@
+{
+  "rule": {
+    "id": 1001,
+    "category": "Kubernetes",
+    "comment": "block root containers",
+    "criteria": [
+      {
+        "name": "runAsRoot",
+        "op": "=",
+        "value": "true"
+      }
+    ],
+    "disable": false,
+    "critical": false,
+    "cfg_type": "user_created",
+    "rule_type": "deny",
+    "rule_mode": "monitor",
+    "containers": [
+      "containers"
+    ]
+  }
+}

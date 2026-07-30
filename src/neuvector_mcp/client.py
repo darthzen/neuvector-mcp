@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import ssl
-from typing import Any, Literal, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal
 
 import httpx
 import structlog
@@ -288,7 +289,9 @@ class NeuVectorClient:
         value = body.get(envelope_key) if isinstance(body, dict) else None
         return list(value) if isinstance(value, Sequence) and not isinstance(value, str) else []
 
-    async def get_object(self, path: str, envelope_key: str, *, params: Mapping[str, str] | None = None) -> dict[str, Any]:
+    async def get_object(
+        self, path: str, envelope_key: str, *, params: Mapping[str, str] | None = None
+    ) -> dict[str, Any]:
         """GET a single-object endpoint and unwrap its envelope key."""
         body = await self.request("GET", path, params=params)
         value = body.get(envelope_key) if isinstance(body, dict) else None

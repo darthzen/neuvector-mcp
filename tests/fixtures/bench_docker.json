@@ -1,0 +1,72 @@
+{
+  "run_timestamp": 1753851600,
+  "run_at": "2026-07-30T05:00:00Z",
+  "cis_version": "cis-1.6.0",
+  "items": [
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "PASS",
+      "test_number": "D.1.1.1",
+      "profile": "Level 1",
+      "scored": false,
+      "automated": false,
+      "description": "Ensure a separate partition for containers has been created",
+      "message": [],
+      "remediation": "Mount /var/lib/docker on its own partition.",
+      "group": ""
+    },
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "WARN",
+      "test_number": "D.2.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure network traffic is restricted between containers on the default bridge",
+      "message": ["icc is enabled on the default bridge"],
+      "remediation": "Run the docker daemon with --icc=false.",
+      "group": ""
+    },
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "WARN",
+      "test_number": "D.2.8",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure the user namespace support is enabled",
+      "message": ["userns-remap is not configured"],
+      "remediation": "Run the docker daemon with --userns-remap.",
+      "group": ""
+    },
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "PASS",
+      "test_number": "D.3.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the docker.service file ownership is set to root:root",
+      "message": ["owner is root:root"],
+      "remediation": "chown root:root /usr/lib/systemd/system/docker.service",
+      "group": ""
+    },
+    {
+      "catalog": "docker",
+      "type": "host",
+      "level": "NOTE",
+      "test_number": "D.4.5",
+      "profile": "Level 2",
+      "scored": false,
+      "automated": false,
+      "description": "Ensure Content trust for Docker is enabled",
+      "message": ["manual review required"],
+      "remediation": "Set DOCKER_CONTENT_TRUST=1 in the environment.",
+      "group": ""
+    }
+  ]
+}

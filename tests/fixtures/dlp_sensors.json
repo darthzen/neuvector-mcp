@@ -1,0 +1,25 @@
+{
+  "sensors": [
+    {
+      "name": "sensor.creditcard",
+      "comment": "predefined credit card sensor",
+      "predefined": true,
+      "rules": [
+        {"name": "creditcard-visa", "patterns": []},
+        {"name": "creditcard-amex", "patterns": []}
+      ]
+    },
+    {
+      "name": "acme-customer-ids",
+      "comment": "internal customer identifier patterns",
+      "predefined": false,
+      "rules": [{"name": "acme-cust-id", "patterns": []}]
+    },
+    {
+      "name": "acme-secrets",
+      "comment": "",
+      "predefined": false,
+      "rules": []
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "run_timestamp": 1753862400,
+  "run_at": "2026-07-30T08:00:00Z",
+  "kubernetes_cis_category": "worker",
+  "kubernetes_cis_version": "cis-1.9",
+  "docker_cis_version": "cis-1.6.0",
+  "items": [
+    {
+      "catalog": "image",
+      "type": "image",
+      "level": "PASS",
+      "test_number": "I.4.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure a user for the container has been created",
+      "message": ["User is set to 10001"],
+      "remediation": "Add a USER directive to the Dockerfile.",
+      "group": ""
+    },
+    {
+      "catalog": "image",
+      "type": "image",
+      "level": "WARN",
+      "test_number": "I.4.6",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that HEALTHCHECK instructions have been added to container images",
+      "message": ["No HEALTHCHECK instruction found"],
+      "remediation": "Add a HEALTHCHECK instruction to the Dockerfile.",
+      "group": "nv.api.prod"
+    },
+    {
+      "catalog": "image",
+      "type": "image",
+      "level": "PASS",
+      "test_number": "I.4.9",
+      "profile": "Level 1",
+      "scored": false,
+      "automated": false,
+      "description": "Ensure that COPY is used instead of ADD in Dockerfiles",
+      "message": [],
+      "remediation": "Use COPY rather than ADD.",
+      "group": ""
+    },
+    {
+      "catalog": "container",
+      "type": "container",
+      "level": "WARN",
+      "test_number": "C.5.4",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that privileged containers are not used",
+      "message": ["Container is running in privileged mode"],
+      "remediation": "Do not run the container with --privileged.",
+      "group": "nv.api.prod"
+    },
+    {
+      "catalog": "container",
+      "type": "container",
+      "level": "PASS",
+      "test_number": "C.5.7",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure privileged ports are not mapped within containers",
+      "message": [],
+      "remediation": "Do not map container ports below 1024.",
+      "group": ""
+    },
+    {
+      "catalog": "container",
+      "type": "container",
+      "level": "INFO",
+      "test_number": "C.5.25",
+      "profile": "Level 2",
+      "scored": false,
+      "automated": false,
+      "description": "Ensure the container is restricted from acquiring additional privileges",
+      "message": ["no-new-privileges not set"],
+      "remediation": "Start the container with --security-opt=no-new-privileges.",
+      "group": ""
+    }
+  ]
+}
