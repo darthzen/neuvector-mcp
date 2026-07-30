@@ -43,7 +43,7 @@ verify: lint types test spec ## the full gate; CI runs exactly this
 	@echo "VERIFY OK"
 
 .PHONY: image
-image: ## build the container image on openSUSE BCI
+image: ## build the container image on SUSE BCI
 	podman build -t $(REGISTRY)/$(IMAGE):$(TAG) -f deploy/Dockerfile .
 
 .PHONY: clean

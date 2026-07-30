@@ -5,7 +5,7 @@ control plane. It exposes NeuVector's inventory, vulnerability, compliance,
 event and policy surface as 72 typed MCP tools, so an operator or an agent can
 ask questions like *"which prod workloads run images with critical CVEs and are
 still in Discover mode"* and, behind an explicit two-step confirmation, act on
-the answer. It ships as one openSUSE BCI image that runs either over `stdio` for
+the answer. It ships as one SUSE BCI image that runs either over `stdio` for
 a desktop MCP client or over authenticated HTTP in-cluster.
 
 **Read-only by default.** Of the 72 tools, only the 41 read tools are registered
@@ -89,15 +89,34 @@ to start on `NV_TRANSPORT=http` without at least one bearer token in
 ### 1. Build and push the image
 
 ```bash
-make image                                   # podman build, openSUSE BCI base
+make image                                   # podman build, SUSE BCI base
 podman push localhost:5000/neuvector-mcp:1.0.0 <your-registry>/neuvector-mcp:1.0.0
 ```
 
 Override the tag or registry with `make image REGISTRY=<host> TAG=<tag>`.
 
-For a SUSE-supported lifecycle, change both `FROM` lines in `deploy/Dockerfile`
-to `registry.suse.com/bci/python:3.13` — same layout, SLE-based. No other base
-is permitted.
+The base is `registry.suse.com/bci/python:3.13` (SLE-based, SUSE-supported
+lifecycle). The openSUSE equivalent, `registry.opensuse.org/opensuse/bci/python`,
+is the only other permitted base — but as of 2026-07 its `:3.13` manifest list
+carries no `linux/amd64` image, so it cannot build on x86_64. Its `:3.12` tag
+can. No base outside those two is permitted.
+
+**No local container runtime?** The image builds fine in-cluster with a
+throwaway rootless BuildKit pod. `kubectl cp` the build context (`pyproject.toml`,
+`README.md`, `src/`, `deploy/Dockerfile`) to `/workspace/src`, mount a registry
+credential as `/home/user/.docker/config.json`, then:
+
+```bash
+kubectl exec <pod> -- sh -c 'BUILDKITD_FLAGS=--oci-worker-no-process-sandbox \
+  buildctl-daemonless.sh build --frontend dockerfile.v0 \
+    --local context=/workspace/src --local dockerfile=/workspace/src/deploy \
+    --opt platform=linux/amd64 \
+    --output type=image,name=<registry>/neuvector-mcp:1.0.0,push=true'
+```
+
+`--oci-worker-no-process-sandbox` is required: without it every `RUN` step dies
+with `error mounting "proc" to rootfs ... operation not permitted`, because a
+rootless pod cannot nest the process sandbox's user namespace.
 
 ### 2. Fill in the three placeholder values
 
@@ -250,6 +269,17 @@ issued for one change cannot be replayed against a different one. This is a
 **guard rail, not a security boundary** — a model could compute it in principle;
 the point is that it cannot do so *accidentally*.
 
+`target` is usually the bare object name, but it is not required to be. Where an
+argument reaches the controller in the **URL path** rather than the body, it is
+in neither the payload nor the object name, and folding it into `target` is the
+only thing that binds the token to it. `nv_update_user_role` is the case that
+matters: its `role` travels in the path, so its target is
+`"<fullname> role=<role>"`, not `"<fullname>"`. Without that, a token previewed
+for `role="reader"` would also authorise `role="admin"` — the handshake would
+fail to gate the single field the tool exists to change. The controller call and
+the request body are untouched by this; only the hashed target differs. Keep this
+in mind when adding any mutating tool with path parameters.
+
 ### Worked example
 
 Call 1 — preview:
@@ -358,30 +388,21 @@ the test would have caught it.
 
 These are real defects and gaps, stated as such.
 
-**1. `nv_update_user_role`'s confirm token does not cover the role.**
-The token is `sha256(operation | target | payload)`. For this tool, `target` is
-the account `fullname` and `payload` is
-`{"config": {"name": …, "role_domains": …}}`. The `role` argument travels only
-in the **URL path** — it is in neither `target` nor `payload`. So a token
-previewed for `role="reader"` **also authorises `role="admin"`**. The handshake
-does not gate the one field this tool exists to change. Fix under consideration:
-fold `role` into `target`.
-
-**2. Empty-string environment variables are treated as unset.**
+**1. Empty-string environment variables are treated as unset.**
 `config._env()` returns the fallback when a variable is present but empty, so
 `NV_READ_ONLY=""` yields `True` (the default) rather than `False`. This
 contradicts the bool parsing PHASE-1 states. It is fail-safe — the server stays
 read-only — and is pinned by a non-strict `xfail` in
 `tests/test_config.py::test_bool_parsing_empty_string_is_false`.
 
-**3. Credentials are redacted before the confirm token is computed.**
+**2. Credentials are redacted before the confirm token is computed.**
 For registry and user mutations, the payload that feeds the token already has
 the password or secret replaced. Consequence: changing **only** a credential
 does not invalidate a previously issued token. This is deliberate — the
 alternative is hashing a live credential — but it is worth knowing before you
 rely on the token to detect payload drift.
 
-**4. The offline test suite is authoritative for CI; no live controller has ever
+**3. The offline test suite is authoritative for CI; no live controller has ever
 been contacted.** See [Verified vs unverified](#verified-vs-unverified). Fixtures
 are hand-written and therefore agree with the implementation by construction.
 
@@ -401,7 +422,7 @@ make verify        # = lint + types + test + spec
 | `make types` | `mypy` in strict mode |
 | `make test` | `pytest` with the branch-coverage gate |
 | `make spec` | `scripts/verify_spec.py` — the nine rules below |
-| `make image` | `podman build` on the openSUSE BCI base |
+| `make image` | `podman build` on the SUSE BCI base |
 | `make smoke` | `scripts/smoke_stdio.py` against a live controller |
 
 Pass a specific interpreter with `PY=`, e.g. `make verify PY=.venv/bin/python`.
@@ -447,7 +468,7 @@ src/neuvector_mcp/       config, client, guard, audit, models, server + 12 tool 
 tests/                   offline suite; every controller call is mocked with respx
 scripts/verify_spec.py   the nine-rule gate
 scripts/smoke_stdio.py   the only script that talks to a real controller
-deploy/                  Dockerfile (openSUSE BCI), deployment.yaml, fleet.yaml
+deploy/                  Dockerfile (SUSE BCI), deployment.yaml, fleet.yaml
 neuvector-mcp-spec/      the normative spec package this server was built from
 ```
 
