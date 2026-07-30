@@ -1,0 +1,15 @@
+Read your handoff. Image building can be done in the k3s cluster using the kubernetes mcp server
+
+---
+
+<task-notification>
+<task-id>bigojbloj</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/97d907e7-9e39-4bac-98e8-de93844777af/tasks/bigojbloj.output</output-file>
+<status>completed</status>
+<summary>Background command "Build and push neuvector-mcp:1.0.0 to Harbor" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Update README
