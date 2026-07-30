@@ -1,0 +1,5 @@
+{"workloads":[
+ {"id":"a1b2c3d4e5f6","name":"api-7d9f8-abcde","domain":"prod","service":"api.prod","image":"registry.local/api:1.4.2","state":"protect","policy_mode":"Protect","high":2,"medium":11,"host_name":"khyron","running":true},
+ {"id":"f6e5d4c3b2a1","name":"worker-55c6b-zzzzz","domain":"prod","service":"worker.prod","image":"registry.local/worker:0.9.0","state":"monitor","policy_mode":"Monitor","high":0,"medium":3,"host_name":"khyron","running":true},
+ {"id":"0123456789ab","name":"redis-0","domain":"staging","service":"redis.staging","image":"docker.io/redis:7.2","state":"discover","policy_mode":"Discover","high":1,"medium":0,"host_name":"khyron","running":true}
+]}

@@ -1,0 +1,178 @@
+---
+# Namespace: deploy alongside NeuVector but not inside it, so a NeuVector
+# upgrade never touches this workload.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neuvector-mcp
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+# Controller credentials. Create the API key in NeuVector first:
+#   Settings -> API Keys -> Add, role "reader" for read-only deployments.
+# Replace both values, or better: manage this Secret with SOPS / External Secrets
+# and never commit plaintext.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: neuvector-mcp-controller
+  namespace: neuvector-mcp
+type: Opaque
+stringData:
+  access-key: REPLACE_ME
+  secret-key: REPLACE_ME
+---
+# Bearer tokens that MCP clients present. Format:
+#   <token>:<scope>|<scope>,<token2>:<scope>
+# Generate with: openssl rand -hex 32
+apiVersion: v1
+kind: Secret
+metadata:
+  name: neuvector-mcp-clients
+  namespace: neuvector-mcp
+type: Opaque
+stringData:
+  bearer-tokens: "REPLACE_ME_32_BYTE_HEX:nv:read"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neuvector-mcp-config
+  namespace: neuvector-mcp
+data:
+  NV_CONTROLLER_URL: "https://neuvector-svc-controller-api.cattle-neuvector-system.svc:10443"
+  NV_VERIFY_TLS: "false"          # controller serves a self-signed cert by default
+  NV_AUTH_MODE: "apikey"
+  NV_TRANSPORT: "http"
+  NV_HTTP_PATH: "/mcp"
+  NV_READ_ONLY: "true"
+  NV_TOOLSETS: "inventory,vulnerability,compliance,events,policy_read"
+  NV_REQUIRE_CONFIRM_TOKEN: "true"
+  NV_MAX_ITEMS: "200"
+  NV_MAX_RESPONSE_CHARS: "60000"
+  NV_LOG_LEVEL: "INFO"
+  NV_LOG_FORMAT: "json"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neuvector-mcp
+  namespace: neuvector-mcp
+  labels:
+    app.kubernetes.io/name: neuvector-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: neuvector-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: neuvector-mcp
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: localhost:5000/neuvector-mcp:1.0.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: neuvector-mcp-config
+          env:
+            - name: NV_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: neuvector-mcp-controller
+                  key: access-key
+            - name: NV_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: neuvector-mcp-controller
+                  key: secret-key
+            - name: NV_HTTP_BEARER_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: neuvector-mcp-clients
+                  key: bearer-tokens
+          ports:
+            - name: mcp
+              containerPort: 8080
+          # The MCP endpoint requires a bearer token, so an unauthenticated HTTP
+          # probe would always fail. Probe the socket instead.
+          startupProbe:
+            tcpSocket: { port: mcp }
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            tcpSocket: { port: mcp }
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket: { port: mcp }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neuvector-mcp
+  namespace: neuvector-mcp
+spec:
+  selector:
+    app.kubernetes.io/name: neuvector-mcp
+  ports:
+    - name: mcp
+      port: 8080
+      targetPort: mcp
+---
+# Egress to the controller and DNS only. Nothing else, in or out.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: neuvector-mcp
+  namespace: neuvector-mcp
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: neuvector-mcp
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cattle-neuvector-system
+      ports:
+        - port: 10443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
