@@ -1,0 +1,5 @@
+Read the handoff. Explain what the files api provides and why you might have gated it out initially.
+
+---
+
+Let's leave it out for now, but preserve the work in its own branch. I'll revisit it after I've had time to think and I don't want to hold up release of what we have.
