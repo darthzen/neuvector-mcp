@@ -734,6 +734,31 @@ async def test_update_waf_sensor_confirmed_sends_config_body(
     }
 
 
+async def test_update_waf_sensor_omits_comment_when_not_given(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """A sensor's comment records WHY it exists; an update must not wipe it.
+
+    RESTWafSensorConfig.Comment is *string+omitempty, so the key must be absent
+    rather than sent as "" when the caller says nothing about the comment.
+    """
+    route = nv_mock.patch(f"{WAF_SENSOR_PATH}/{WAF_SENSOR}").respond(200, json={})
+    await _confirmed(
+        client, "nv_update_waf_sensor", {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE]}
+    )
+    assert "comment" not in json.loads(route.calls.last.request.read())["config"]
+
+
+async def test_update_waf_sensor_empty_comment_clears_it(client, nv_mock: respx.MockRouter) -> None:
+    route = nv_mock.patch(f"{WAF_SENSOR_PATH}/{WAF_SENSOR}").respond(200, json={})
+    await _confirmed(
+        client,
+        "nv_update_waf_sensor",
+        {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE], "comment": ""},
+    )
+    assert json.loads(route.calls.last.request.read())["config"]["comment"] == ""
+
+
 # -- nv_delete_waf_sensor -------------------------------------------------------
 
 
@@ -784,13 +809,41 @@ async def test_set_waf_group_confirmed_sends_replace_body(
     assert result.structured_content["status"] == "applied"
     # 'replace' takes {name, action} objects. The sibling 'delete' key takes bare
     # name strings; sending objects there returns code 6.
+    # 'status' is absent because the caller said nothing about it: RESTWafGroupConfig
+    # .Status is *bool+omitempty, so omitting it leaves inspection as it was.
     assert json.loads(route.calls.last.request.read()) == {
         "config": {
             "name": LEARNED_GROUP,
-            "status": True,
             "replace": [{"name": WAF_SENSOR, "action": "deny"}],
         }
     }
+
+
+async def test_set_waf_group_does_not_silently_enable_inspection(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """Binding sensors must not turn inspection ON as a side effect.
+
+    A group may have WAF deliberately disabled. Sending status=True by default
+    would re-enable it, which starts DENYING traffic on a Protect-mode group.
+    """
+    route = nv_mock.patch(f"{WAF_GROUP_PATH}/{LEARNED_GROUP}").respond(200, json={})
+    result = await client.call_tool(
+        "nv_set_waf_group",
+        {"group_name": LEARNED_GROUP, "sensors": [{"name": WAF_SENSOR, "action": "deny"}]},
+    )
+    assert "Leave WAF inspection" in result.structured_content["effect"]
+    assert route.call_count == 0
+
+
+async def test_set_waf_group_status_sent_when_explicit(client, nv_mock: respx.MockRouter) -> None:
+    route = nv_mock.patch(f"{WAF_GROUP_PATH}/{LEARNED_GROUP}").respond(200, json={})
+    await _confirmed(
+        client,
+        "nv_set_waf_group",
+        {"group_name": LEARNED_GROUP, "sensors": [], "status": False},
+    )
+    assert json.loads(route.calls.last.request.read())["config"]["status"] is False
 
 
 async def test_set_waf_group_empty_list_unbinds_everything(
