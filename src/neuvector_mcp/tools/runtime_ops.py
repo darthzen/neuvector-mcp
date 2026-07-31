@@ -28,9 +28,10 @@ from pydantic import Field
 from ..client import build_query
 from ..config import Settings
 from ..context import app_context
-from ..errors import GuardError, ValidationError_
+from ..errors import GuardError, NotFoundError, UpstreamError, ValidationError_
 from ..guard import authorise_write
 from ..models import WriteOutcome, redact_secrets, service_namespace
+from ..modes import describe_drift, plan_mode_patches, read_service_modes
 
 #: Creates something, or starts an action, that did not exist before. Not
 #: destructive; not idempotent (a second call creates or starts again).
@@ -50,14 +51,10 @@ MUTATING_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True
 )
 
-#: ``scope`` -> controller route. All three take the same body type,
-#: ``RESTServiceBatchConfigData``; the dimension is chosen by the path, which is
-#: why there is no ``profile_mode`` field on the request body.
-_SERVICE_MODE_PATHS: dict[str, str] = {
-    "both": "/v1/service/config",
-    "network": "/v1/service/config/network",
-    "profile": "/v1/service/config/profile",
-}
+#: The one route that works. ``/v1/service/config/network`` honours only
+#: ``policy_mode`` and ``/v1/service/config/profile`` is inert on every field, so
+#: the dimension is selected by which payload field is sent. See ``modes``.
+_SERVICE_CONFIG_PATH = "/v1/service/config"
 
 
 def register(mcp: FastMCP, settings: Settings) -> None:
@@ -169,20 +166,19 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 "controller call.",
             ),
         ],
-        scope: Annotated[
-            Literal["both", "network", "profile"],
-            Field(
-                description="Which dimension to change: 'network' sets only network policy "
-                "enforcement, 'profile' sets only process and file profile enforcement, 'both' "
-                "sets them together. Use 'network' or 'profile' when you want to enforce one "
-                "dimension while still learning the other."
-            ),
-        ] = "both",
         policy_mode: Annotated[
             Literal["Discover", "Monitor", "Protect"] | None,
             Field(
-                description="Discover learns behaviour, Monitor alerts only, Protect BLOCKS. "
-                "Omit to leave the mode unchanged."
+                description="NETWORK policy enforcement. Discover learns behaviour, Monitor "
+                "alerts only, Protect BLOCKS. Omit to leave it unchanged."
+            ),
+        ] = None,
+        profile_mode: Annotated[
+            Literal["Discover", "Monitor", "Protect"] | None,
+            Field(
+                description="PROCESS and FILE profile enforcement, the dimension that blocks "
+                "unexpected executables. Independent of policy_mode: set one to enforce a single "
+                "dimension while the other keeps learning. Omit to leave it unchanged."
             ),
         ] = None,
         baseline_profile: Annotated[
@@ -190,7 +186,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             Field(
                 description="Process baseline strictness, verbatim controller string; see "
                 "'baseline_profile' on an existing service via nv_list_services for the values "
-                "in use. Only meaningful with scope='profile' or 'both'."
+                "in use. Affects the profile dimension only."
             ),
         ] = None,
         not_scored: Annotated[
@@ -210,23 +206,26 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         Traffic-affecting: moving a service to Protect starts BLOCKING connections and
         process activity that its learned policy does not allow, for every container in
         that service at once, and a service whose learning was incomplete will break the
-        moment you do it. Preview first and read the service list in the plan. 'scope'
-        picks the dimension: 'network' enforces network policy only, 'profile' enforces
-        process and file profiles only, 'both' does the two together - a common safe
-        sequence is network first, profile once process learning has settled. Get names
-        from nv_list_services, and check each service's current policy_mode and
-        profile_mode there before changing them.
+        moment you do it. Preview first and read the service list in the plan. The two
+        dimensions are independent: policy_mode enforces network policy, profile_mode
+        enforces process and file profiles, and a common safe sequence is network first,
+        profile once process learning has settled. Get names from nv_list_services and
+        check each service's current modes there first. The controller only accepts a
+        move to an adjacent mode, so this tool reads the current mode, steps through
+        Monitor when it has to, and reads the result back rather than trusting the
+        controller's success status.
 
-        Calls PATCH /v1/service/config with scope='both'.
-        Calls PATCH /v1/service/config/network with scope='network'.
-        Calls PATCH /v1/service/config/profile with scope='profile'.
+        Calls GET /v1/service to read the current modes and to verify the result.
+        Calls PATCH /v1/service/config, once per rung it has to step through.
         """
         app = app_context(ctx)
         # sorted(): the batch has set semantics, and a stable order keeps the
         # confirm token independent of the order the caller listed the services in.
-        config: dict[str, Any] = {"services": sorted(services)}
+        ordered = sorted(services)
+        config: dict[str, Any] = {"services": ordered}
         for key, value in (
             ("policy_mode", policy_mode),
+            ("profile_mode", profile_mode),
             ("baseline_profile", baseline_profile),
             ("not_scored", not_scored),
         ):
@@ -234,11 +233,10 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 config[key] = value
         if len(config) == 1:
             raise ValidationError_(
-                "nv_set_service_mode needs at least one of policy_mode, baseline_profile or "
-                "not_scored. No request was sent."
+                "nv_set_service_mode needs at least one of policy_mode, profile_mode, "
+                "baseline_profile or not_scored. No request was sent."
             )
         wire_payload: dict[str, Any] = {"config": config}
-        path = _SERVICE_MODE_PATHS[scope]
 
         # D.0.5: authorise_write() takes one namespace and this batch may span
         # several, so narrow first - refuse the whole batch if any service sits
@@ -254,14 +252,27 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 )
         guard_namespace = namespaces[0] if len(namespaces) == 1 else None
 
-        target = ",".join(sorted(services))
+        target = ",".join(ordered)
+        settings_text = ", ".join(
+            f"{k}={v!r}" for k, v in sorted(config.items()) if k != "services"
+        )
         effect = (
-            f"Set {', '.join(f'{k}={v!r}' for k, v in sorted(config.items()) if k != 'services')} "
-            f"on {len(services)} service(s): {', '.join(sorted(services))} (scope={scope})."
+            f"Set {settings_text} on {len(ordered)} service(s): {', '.join(ordered)}."
             + (
-                " Traffic and process activity outside the learned policy will be blocked "
-                "immediately."
+                " Traffic outside the learned network policy will be blocked immediately."
                 if policy_mode == "Protect"
+                else ""
+            )
+            + (
+                " Process and file activity outside the learned profile will be blocked "
+                "immediately."
+                if profile_mode == "Protect"
+                else ""
+            )
+            + (
+                " The controller refuses a two-rung move, so any service still in Discover "
+                "is stepped through Monitor first."
+                if "Protect" in (policy_mode, profile_mode)
                 else ""
             )
         )
@@ -279,12 +290,53 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         if plan is not None:
             return plan
 
-        response = await app.client.request("PATCH", path, json=wire_payload)
+        before = await read_service_modes(app.client, ordered)
+        unknown = [name for name in ordered if name not in before]
+        if unknown:
+            raise NotFoundError(
+                f"nv_set_service_mode found no service named {unknown}. Names come from "
+                "nv_list_services and carry the namespace, e.g. 'api.prod'. Nothing was sent."
+            )
+
+        bodies = plan_mode_patches(ordered, config, before)
+        if not bodies:
+            return WriteOutcome(
+                status="applied",
+                operation="nv_set_service_mode",
+                target=target,
+                effect=(
+                    f"no change: all {len(ordered)} service(s) already have {settings_text}. "
+                    "Nothing was sent to the controller."
+                ),
+                payload=wire_payload,
+            )
+
+        response: Any = None
+        for body in bodies:
+            response = await app.client.request("PATCH", _SERVICE_CONFIG_PATH, json=body)
+
+        # A 200 from this endpoint is not evidence that anything moved, so the
+        # outcome reports what the controller says afterwards, not what it accepted.
+        after = await read_service_modes(app.client, ordered)
+        drift = describe_drift(ordered, config, after)
+        if drift:
+            raise UpstreamError(
+                "nv_set_service_mode sent "
+                f"{len(bodies)} request(s), all accepted, but the controller did not apply "
+                f"every value: {'; '.join(drift)}. The services are in the state shown there; "
+                "re-read them with nv_list_services before acting."
+            )
+
+        stepped = len(bodies) - 1
         return WriteOutcome(
             status="applied",
             operation="nv_set_service_mode",
             target=target,
-            effect=f"settings applied to {len(services)} service(s) with scope={scope}",
+            effect=(
+                f"{settings_text} verified on {len(ordered)} service(s) after {len(bodies)} "
+                f"request(s)"
+                + (f", stepping through {stepped} intermediate mode(s)" if stepped else "")
+            ),
             payload=wire_payload,
             controller_response=redact_secrets(response) if isinstance(response, dict) else {},
         )

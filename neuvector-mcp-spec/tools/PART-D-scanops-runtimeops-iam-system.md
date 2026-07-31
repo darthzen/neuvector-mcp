@@ -1246,7 +1246,7 @@ contains `outside NV_ALLOWED_NAMESPACES` and `route.call_count == 0`),
 | | |
 |---|---|
 | **Toolset** | `runtime_ops` (write) |
-| **Endpoints** | `PATCH /v1/service/config`, `PATCH /v1/service/config/network`, `PATCH /v1/service/config/profile` |
+| **Endpoints** | `GET /v1/service` (read current modes, and verify), `PATCH /v1/service/config` |
 | **Annotations** | `readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True` (`MUTATING_UPDATE`) |
 | **Returns** | `WriteOutcome` |
 
@@ -1255,25 +1255,28 @@ contains `outside NV_ALLOWED_NAMESPACES` and `route.call_count == 0`),
 | Name | Type | Default | Description (verbatim into `Field(description=...)`) |
 |---|---|---|---|
 | `services` | `list[str]` (min_length=1) | required | Service (group) names from nv_list_services, e.g. ['api.prod', 'web.prod']. All of them get the same settings in one controller call. |
-| `scope` | `Literal["both","network","profile"]` | `"both"` | Which dimension to change: 'network' sets only network policy enforcement, 'profile' sets only process and file profile enforcement, 'both' sets them together. Use 'network' or 'profile' when you want to enforce one dimension while still learning the other. |
-| `policy_mode` | `Literal["Discover","Monitor","Protect"] \| None` | `None` | Discover learns behaviour, Monitor alerts only, Protect BLOCKS. Omit to leave the mode unchanged. |
-| `baseline_profile` | `str \| None` | `None` | Process baseline strictness, verbatim controller string; see 'baseline_profile' on an existing service via nv_list_services for the values in use. Only meaningful with scope='profile' or 'both'. |
+| `policy_mode` | `Literal["Discover","Monitor","Protect"] \| None` | `None` | NETWORK policy enforcement. Discover learns behaviour, Monitor alerts only, Protect BLOCKS. Omit to leave it unchanged. |
+| `profile_mode` | `Literal["Discover","Monitor","Protect"] \| None` | `None` | PROCESS and FILE profile enforcement, the dimension that blocks unexpected executables. Independent of policy_mode: set one to enforce a single dimension while the other keeps learning. Omit to leave it unchanged. |
+| `baseline_profile` | `str \| None` | `None` | Process baseline strictness, verbatim controller string; see 'baseline_profile' on an existing service via nv_list_services for the values in use. Affects the profile dimension only. |
 | `not_scored` | `bool \| None` | `None` | True excludes these services from the cluster security score. |
 | `confirm` | `str \| None` | `None` | Confirmation token from the plan returned by the first call. Omit on the first call to preview the change. |
 
-**Endpoint and payload mapping** — all three routes take the **same** body type,
-`RESTServiceBatchConfigData` (verified in Appendix A.1 and Appendix B):
+**Endpoint and payload mapping** — one route, `PATCH /v1/service/config`, taking
+`RESTServiceBatchConfigData`. **The dimension is chosen by the payload field, not
+by the path.** Measured against a live 5.6.0 controller on 2026-07-31:
 
-| `scope` | Path | Applies to |
-|---|---|---|
-| `both` | `/v1/service/config` | network policy mode **and** process/file profile mode together |
-| `network` | `/v1/service/config/network` | network policy enforcement only |
-| `profile` | `/v1/service/config/profile` | process and file profile enforcement only, including `baseline_profile` |
+| Route | Behaviour |
+|---|---|
+| `/v1/service/config` | honours all five fields, including `profile_mode` |
+| `/v1/service/config/network` | honours `policy_mode` only |
+| `/v1/service/config/profile` | **inert** — accepts any body with 200 and changes nothing |
 
 ```python
-config: dict[str, Any] = {"services": sorted(services)}   # sorted: set semantics, stable token
+ordered = sorted(services)                     # set semantics, stable token
+config: dict[str, Any] = {"services": ordered}
 for key, value in (
     ("policy_mode", policy_mode),
+    ("profile_mode", profile_mode),
     ("baseline_profile", baseline_profile),
     ("not_scored", not_scored),
 ):
@@ -1281,21 +1284,27 @@ for key, value in (
         config[key] = value
 if len(config) == 1:
     raise ValidationError_(
-        "nv_set_service_mode needs at least one of policy_mode, baseline_profile or "
-        "not_scored. No request was sent."
+        "nv_set_service_mode needs at least one of policy_mode, profile_mode, "
+        "baseline_profile or not_scored. No request was sent."
     )
 wire_payload = {"config": config}
-path = {
-    "both": "/v1/service/config",
-    "network": "/v1/service/config/network",
-    "profile": "/v1/service/config/profile",
-}[scope]
 ```
 
-`RESTServiceBatchConfig` has exactly four fields — `services`, `policy_mode`,
-`baseline_profile`, `not_scored` — and every one of them is used above. There is
-no `profile_mode` field on the request body: the *dimension* is chosen by the
-path, not by the body. That is why `scope` exists.
+`RESTServiceBatchConfig` has **five** fields — `services`, `policy_mode`,
+`profile_mode`, `baseline_profile`, `not_scored` — and every one of them is used
+above. Appendix B omitted `profile_mode` until 2026-07-31; that omission is the
+whole reason the earlier `scope` argument existed, and `scope='profile'` was a
+silent no-op for the entire life of 1.1.0.
+
+**Stepwise transitions** — the controller accepts a mode move of only one rung
+along `Discover -> Monitor -> Protect`. A two-rung jump returns **200 and is
+discarded**. `neuvector_mcp/modes.py` owns this: after the guard, the tool reads
+each service's current modes with `GET /v1/service`, plans the walk with
+`plan_mode_patches()` (which always ends with the exact payload the confirm token
+bound), issues the `PATCH`es in order, then reads the services back and refuses to
+report `applied` if anything did not land. A service already at the requested mode
+contributes no intermediate step, so re-applying `Protect` never dips through
+`Monitor`.
 
 **Docstring (use verbatim)**
 
@@ -1305,59 +1314,73 @@ Set the enforcement mode of one or more services in a single call.
 Traffic-affecting: moving a service to Protect starts BLOCKING connections and
 process activity that its learned policy does not allow, for every container in
 that service at once, and a service whose learning was incomplete will break the
-moment you do it. Preview first and read the service list in the plan. 'scope'
-picks the dimension: 'network' enforces network policy only, 'profile' enforces
-process and file profiles only, 'both' does the two together - a common safe
-sequence is network first, profile once process learning has settled. Get names
-from nv_list_services, and check each service's current policy_mode and
-profile_mode there before changing them.
+moment you do it. Preview first and read the service list in the plan. The two
+dimensions are independent: policy_mode enforces network policy, profile_mode
+enforces process and file profiles, and a common safe sequence is network first,
+profile once process learning has settled. Get names from nv_list_services and
+check each service's current modes there first. The controller only accepts a
+move to an adjacent mode, so this tool reads the current mode, steps through
+Monitor when it has to, and reads the result back rather than trusting the
+controller's success status.
 
-Calls PATCH /v1/service/config with scope='both'.
-Calls PATCH /v1/service/config/network with scope='network'.
-Calls PATCH /v1/service/config/profile with scope='profile'.
+Calls GET /v1/service to read the current modes and to verify the result.
+Calls PATCH /v1/service/config, once per rung it has to step through.
 ```
 
 **Body** — §7.4 shape, with the namespace pre-check of D.0.5 **before**
 `authorise_write`. `target=",".join(sorted(services))`, `namespace=guard_namespace`,
 
 ```python
+settings_text = ", ".join(f"{k}={v!r}" for k, v in sorted(config.items()) if k != "services")
 effect = (
-    f"Set {', '.join(f'{k}={v!r}' for k, v in sorted(config.items()) if k != 'services')} "
-    f"on {len(services)} service(s): {', '.join(sorted(services))} (scope={scope})."
-    + (
-        " Traffic and process activity outside the learned policy will be blocked immediately."
-        if policy_mode == "Protect"
-        else ""
-    )
+    f"Set {settings_text} on {len(ordered)} service(s): {', '.join(ordered)}."
+    + (" Traffic outside the learned network policy will be blocked immediately."
+       if policy_mode == "Protect" else "")
+    + (" Process and file activity outside the learned profile will be blocked immediately."
+       if profile_mode == "Protect" else "")
+    + (" The controller refuses a two-rung move, so any service still in Discover "
+       "is stepped through Monitor first."
+       if "Protect" in (policy_mode, profile_mode) else "")
 )
 ```
 
-The `Protect` sentence is copied from the reference `nv_set_group_policy_mode`
-deliberately: `test_first_call_returns_plan_and_sends_nothing` in
-`test_guard.py` already keys on `"blocked immediately"`, and the two tools should
-read the same to an operator.
+The `blocked immediately` wording is shared with `nv_set_group_policy_mode`
+deliberately: `test_first_call_returns_plan_and_sends_nothing` in `test_guard.py`
+keys on that phrase, and the two tools should read the same to an operator.
 
-**Fixture** — none; all three routes return an empty body. Respond `200, json={}`.
+**Fixture** — none. Tests use `conftest.FakeServices`, which serves
+`GET /v1/service` and applies `PATCH /v1/service/config` under the real
+controller's rule that a two-rung move is accepted and discarded. A plain
+`respond(200, json={})` mock cannot catch the bugs this tool exists to avoid.
 
 **Tests** `tests/test_runtime_ops.py`:
 `test_set_service_mode_preview_sends_nothing`,
 `test_set_service_mode_confirmed_applies_to_batch_endpoint`,
-`test_set_service_mode_network_scope_uses_network_endpoint`,
-`test_set_service_mode_profile_scope_uses_profile_endpoint`,
+`test_set_service_mode_profile_mode_selected_by_payload_field`,
+`test_set_service_mode_steps_through_monitor_to_protect`,
+`test_set_service_mode_steps_both_dimensions`,
+`test_set_service_mode_steps_only_the_services_that_need_it`,
+`test_set_service_mode_already_at_target_sends_no_write`,
+`test_set_service_mode_reports_a_silently_dropped_change`,
+`test_set_service_mode_unknown_service_writes_nothing`,
+`test_set_service_mode_token_distinguishes_the_two_dimensions`,
 `test_set_service_mode_sorts_services_for_stable_token`,
 `test_set_service_mode_multi_namespace_refused_outside_allowlist`,
-`test_set_service_mode_no_fields_raises`.
+`test_set_service_mode_no_fields_raises`,
+`test_set_service_mode_rejects_the_removed_scope_argument`.
+The ladder helpers have their own unit tests in `tests/test_modes.py`.
 
 **Notes**
 * Appendix A.1 documents all three routes with the **same** request and response
-  schemas and gives no prose distinguishing them, so the dimension mapping above
-  is a *design decision of this spec*, grounded in `RESTService` carrying two
-  separate mode fields (`policy_mode` and `profile_mode`) while
-  `RESTServiceBatchConfig` carries only one. Verify on first use: set
-  `scope='network'` on a test service and confirm via `nv_list_services` that
-  `policy_mode` moved and `profile_mode` did not. If the controller behaves
-  otherwise, correct this table before shipping — do not change the argument
-  names.
+  schemas and gives no prose distinguishing them. This spec originally guessed
+  that the path selected the dimension and flagged the guess for verification on
+  first use. That verification ran on 2026-07-31 and the guess was wrong: the
+  field selects the dimension, and `/v1/service/config/profile` moves nothing at
+  all. The `scope` argument that encoded the guess has been removed, so a caller
+  still passing it now fails loudly instead of silently changing nothing.
+* The confirm token now binds the dimension, because the dimension is a payload
+  field. Under `scope` it did not: all three scopes hashed to the same token, so
+  a plan previewed as `profile` could be confirmed as `network`.
 * `services` is **sorted** in the payload and in `target`, so the confirm token
   does not depend on the order the model listed them. `sorted()` also makes the
   `effect` string stable, which matters for the test assertions.
@@ -1366,8 +1389,9 @@ read the same to an operator.
   namespace to the guard only when the batch is single-namespace. A batch is
   never partially applied by this server; the controller applies the batch
   atomically or not at all.
-* Common codes: **7** a service in the list does not exist — the controller
-  rejects the whole batch, so verify names first; **6** invalid `policy_mode` or
+* Common codes: **7** a service in the list does not exist — the read-before-write
+  now catches this first and raises `NotFoundError` without sending a `PATCH`;
+  **6** invalid `policy_mode` or
   `baseline_profile`; **4** the service is federated or ground-configured and its
   mode may not be set locally; **20** Protect not covered by the licence; **8**
   write to cluster failed (retried automatically by `client.py`); **25** access

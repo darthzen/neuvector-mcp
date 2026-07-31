@@ -12,7 +12,7 @@ import pytest
 import respx
 from fastmcp import Client
 
-from conftest import make_settings
+from conftest import FakeServices, make_settings
 from neuvector_mcp.config import DEFAULT_TOOLSETS
 from neuvector_mcp.guard import confirm_token
 from neuvector_mcp.server import build_server
@@ -25,6 +25,14 @@ SERVICE_BATCH = "/v1/service/config"
 SERVICE_NETWORK = "/v1/service/config/network"
 SERVICE_PROFILE = "/v1/service/config/profile"
 SNIFFER = "/v1/sniffer"
+
+
+async def apply(client, args: dict) -> dict:
+    """Preview, then confirm, and return the applied outcome."""
+    plan = await client.call_tool("nv_set_service_mode", args)
+    token = plan.structured_content["confirm_token"]
+    result = await client.call_tool("nv_set_service_mode", {**args, "confirm": token})
+    return result.structured_content
 
 
 # -- nv_quarantine_workload -----------------------------------------------------
@@ -111,7 +119,9 @@ async def test_quarantine_outside_allowed_namespace_refused(nv_mock: respx.MockR
 
 
 async def test_set_service_mode_preview_sends_nothing(client, nv_mock: respx.MockRouter) -> None:
-    route = nv_mock.patch(SERVICE_BATCH).respond(200, json={})
+    fake = FakeServices(
+        {"api.prod": {"policy_mode": "Discover"}, "web.prod": {"policy_mode": "Discover"}}
+    ).install(nv_mock)
     result = await client.call_tool(
         "nv_set_service_mode",
         {"services": ["api.prod", "web.prod"], "policy_mode": "Protect"},
@@ -122,72 +132,186 @@ async def test_set_service_mode_preview_sends_nothing(client, nv_mock: respx.Moc
     assert len(body["confirm_token"]) == 12
     assert "blocked immediately" in body["effect"]
     assert "api.prod, web.prod" in body["effect"]
-    assert route.call_count == 0, "the guard must not touch the controller"
+    assert fake.writes.call_count == 0, "the guard must not touch the controller"
+    assert fake.reads.call_count == 0, "not even the read-before-write, which comes after confirm"
 
 
 async def test_set_service_mode_confirmed_applies_to_batch_endpoint(
     client, nv_mock: respx.MockRouter
 ) -> None:
-    route = nv_mock.patch(SERVICE_BATCH).respond(200, json={})
-    args = {
-        "services": ["api.prod", "web.prod"],
-        "policy_mode": "Monitor",
-        "not_scored": False,
-    }
-    plan = await client.call_tool("nv_set_service_mode", args)
-    token = plan.structured_content["confirm_token"]
+    fake = FakeServices(
+        {
+            "api.prod": {"policy_mode": "Discover", "not_scored": True},
+            "web.prod": {"policy_mode": "Discover", "not_scored": True},
+        }
+    ).install(nv_mock)
+    body = await apply(
+        client,
+        {"services": ["api.prod", "web.prod"], "policy_mode": "Monitor", "not_scored": False},
+    )
 
-    result = await client.call_tool("nv_set_service_mode", {**args, "confirm": token})
-
-    assert result.structured_content["status"] == "applied"
-    assert route.call_count == 1
-    assert json.loads(route.calls.last.request.read()) == {
+    assert body["status"] == "applied"
+    assert fake.writes.call_count == 1, "Discover -> Monitor is one rung; no stepping needed"
+    assert json.loads(fake.writes.calls.last.request.read()) == {
         "config": {
             "services": ["api.prod", "web.prod"],
             "policy_mode": "Monitor",
             "not_scored": False,
         }
     }
+    assert fake.mode("api.prod") == "Monitor"
 
 
-async def test_set_service_mode_network_scope_uses_network_endpoint(
+async def test_set_service_mode_profile_mode_selected_by_payload_field(
     client, nv_mock: respx.MockRouter
 ) -> None:
-    batch = nv_mock.patch(SERVICE_BATCH).respond(200, json={})
+    """The dimension is the payload field. The two sibling routes are never used."""
     network = nv_mock.patch(SERVICE_NETWORK).respond(200, json={})
-    args = {"services": ["api.prod"], "scope": "network", "policy_mode": "Protect"}
-    plan = await client.call_tool("nv_set_service_mode", args)
-    token = plan.structured_content["confirm_token"]
+    profile = nv_mock.patch(SERVICE_PROFILE).respond(200, json={})
+    fake = FakeServices(
+        {"api.prod": {"policy_mode": "Discover", "profile_mode": "Discover"}}
+    ).install(nv_mock)
 
-    await client.call_tool("nv_set_service_mode", {**args, "confirm": token})
+    await apply(client, {"services": ["api.prod"], "profile_mode": "Monitor"})
 
-    assert network.call_count == 1
-    assert batch.call_count == 0
-    assert json.loads(network.calls.last.request.read()) == {
-        "config": {"services": ["api.prod"], "policy_mode": "Protect"}
+    assert network.call_count == 0 and profile.call_count == 0
+    assert json.loads(fake.writes.calls.last.request.read()) == {
+        "config": {"services": ["api.prod"], "profile_mode": "Monitor"}
     }
+    assert fake.mode("api.prod", "profile_mode") == "Monitor"
+    assert fake.mode("api.prod", "policy_mode") == "Discover", "the other dimension is untouched"
 
 
-async def test_set_service_mode_profile_scope_uses_profile_endpoint(
+async def test_set_service_mode_steps_through_monitor_to_protect(
     client, nv_mock: respx.MockRouter
 ) -> None:
-    batch = nv_mock.patch(SERVICE_BATCH).respond(200, json={})
-    profile = nv_mock.patch(SERVICE_PROFILE).respond(200, json={})
-    args = {
-        "services": ["api.prod"],
-        "scope": "profile",
-        "baseline_profile": "zero-drift",
-    }
-    plan = await client.call_tool("nv_set_service_mode", args)
-    token = plan.structured_content["confirm_token"]
+    """Discover -> Protect direct is accepted and dropped, so it must be walked."""
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}).install(nv_mock)
 
-    await client.call_tool("nv_set_service_mode", {**args, "confirm": token})
+    body = await apply(client, {"services": ["api.prod"], "policy_mode": "Protect"})
 
-    assert profile.call_count == 1
-    assert batch.call_count == 0
-    assert json.loads(profile.calls.last.request.read()) == {
-        "config": {"services": ["api.prod"], "baseline_profile": "zero-drift"}
-    }
+    assert [config["policy_mode"] for config in fake.patches] == ["Monitor", "Protect"]
+    assert fake.mode("api.prod") == "Protect"
+    assert "verified" in body["effect"]
+    assert "1 intermediate mode" in body["effect"]
+
+
+async def test_set_service_mode_steps_both_dimensions(client, nv_mock: respx.MockRouter) -> None:
+    fake = FakeServices(
+        {"api.prod": {"policy_mode": "Discover", "profile_mode": "Monitor"}}
+    ).install(nv_mock)
+
+    await apply(
+        client,
+        {"services": ["api.prod"], "policy_mode": "Protect", "profile_mode": "Protect"},
+    )
+
+    assert fake.patches == [
+        {"services": ["api.prod"], "policy_mode": "Monitor"},
+        {"services": ["api.prod"], "policy_mode": "Protect", "profile_mode": "Protect"},
+    ], "only the dimension that needs a rung gets one; the final payload carries both"
+    assert fake.mode("api.prod") == "Protect"
+    assert fake.mode("api.prod", "profile_mode") == "Protect"
+
+
+async def test_set_service_mode_steps_only_the_services_that_need_it(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    fake = FakeServices(
+        {
+            "api.prod": {"policy_mode": "Discover"},
+            "web.prod": {"policy_mode": "Monitor"},
+            "db.prod": {"policy_mode": "Protect"},
+        }
+    ).install(nv_mock)
+
+    await apply(
+        client,
+        {"services": ["web.prod", "api.prod", "db.prod"], "policy_mode": "Protect"},
+    )
+
+    assert fake.patches[0] == {"services": ["api.prod"], "policy_mode": "Monitor"}, (
+        "web.prod is already adjacent and db.prod must not dip out of Protect"
+    )
+    assert len(fake.patches) == 2
+    assert all(fake.mode(name) == "Protect" for name in ("api.prod", "web.prod", "db.prod"))
+
+
+async def test_set_service_mode_already_at_target_sends_no_write(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    fake = FakeServices({"api.prod": {"policy_mode": "Protect"}}).install(nv_mock)
+
+    body = await apply(client, {"services": ["api.prod"], "policy_mode": "Protect"})
+
+    assert body["status"] == "applied"
+    assert "no change" in body["effect"]
+    assert fake.writes.call_count == 0
+
+
+async def test_set_service_mode_reports_a_silently_dropped_change(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """A 200 the controller did not honour must never be reported as applied."""
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}, apply_writes=False).install(
+        nv_mock
+    )
+
+    plan = await client.call_tool(
+        "nv_set_service_mode", {"services": ["api.prod"], "policy_mode": "Monitor"}
+    )
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool(
+            "nv_set_service_mode",
+            {
+                "services": ["api.prod"],
+                "policy_mode": "Monitor",
+                "confirm": plan.structured_content["confirm_token"],
+            },
+        )
+
+    assert "did not apply" in str(excinfo.value)
+    assert "'Discover'" in str(excinfo.value), "the error names the state the service is really in"
+    assert fake.writes.call_count == 1
+
+
+async def test_set_service_mode_unknown_service_writes_nothing(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}).install(nv_mock)
+
+    plan = await client.call_tool(
+        "nv_set_service_mode", {"services": ["typo.prod"], "policy_mode": "Monitor"}
+    )
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool(
+            "nv_set_service_mode",
+            {
+                "services": ["typo.prod"],
+                "policy_mode": "Monitor",
+                "confirm": plan.structured_content["confirm_token"],
+            },
+        )
+
+    assert "found no service named" in str(excinfo.value)
+    assert fake.writes.call_count == 0
+
+
+async def test_set_service_mode_token_distinguishes_the_two_dimensions(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """Regression: with the dimension in the route, all scopes shared one token."""
+    FakeServices({"api.prod": {"policy_mode": "Discover"}}).install(nv_mock)
+    network = await client.call_tool(
+        "nv_set_service_mode", {"services": ["api.prod"], "policy_mode": "Protect"}
+    )
+    profile = await client.call_tool(
+        "nv_set_service_mode", {"services": ["api.prod"], "profile_mode": "Protect"}
+    )
+
+    assert (
+        network.structured_content["confirm_token"] != profile.structured_content["confirm_token"]
+    )
 
 
 async def test_set_service_mode_sorts_services_for_stable_token(
@@ -237,7 +361,21 @@ async def test_set_service_mode_no_fields_raises(client, nv_mock: respx.MockRout
     route = nv_mock.patch(SERVICE_BATCH).respond(200, json={})
     with pytest.raises(Exception) as excinfo:
         await client.call_tool("nv_set_service_mode", {"services": ["api.prod"]})
-    assert "at least one of policy_mode" in str(excinfo.value)
+    assert "at least one of policy_mode, profile_mode" in str(excinfo.value)
+    assert route.call_count == 0
+
+
+async def test_set_service_mode_rejects_the_removed_scope_argument(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """'profile' scope was a silent no-op; a caller still passing it must fail loudly."""
+    route = nv_mock.patch(SERVICE_BATCH).respond(200, json={})
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool(
+            "nv_set_service_mode",
+            {"services": ["api.prod"], "scope": "profile", "policy_mode": "Monitor"},
+        )
+    assert "scope" in str(excinfo.value)
     assert route.call_count == 0
 
 
