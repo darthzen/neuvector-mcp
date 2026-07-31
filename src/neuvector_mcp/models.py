@@ -2325,7 +2325,10 @@ class SensorBrief(BaseModel):
             name=str(raw.get("name", "") or ""),
             comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
             rule_count=len(raw.get("rules") or []),
-            predefined=bool(raw.get("predefined", False)),
+            # VERIFIED (live controller 5.4): the field is 'predefine', not
+            # 'predefined'. 'predefined' is read as a fallback only because
+            # Appendix B documents neither and a rename upstream is plausible.
+            predefined=bool(raw.get("predefine", raw.get("predefined", False))),
         )
 
 
@@ -2348,6 +2351,199 @@ class WafSensorList(BaseModel):
         default="local", description="Scope the sensors were read from: local or fed."
     )
     sensors: list[SensorBrief]
+
+
+class WafPattern(BaseModel):
+    """One regex pattern inside a WAF rule.
+
+    Appendix B documents no WAF schema. Every field here was read back from a
+    live controller (5.4) after a round-trip write, so the shape is verified
+    against behaviour rather than against a document.
+    """
+
+    model_config = _BASE
+
+    key: str = Field(
+        default="pattern",
+        description="Match kind. The controller only emits 'pattern' for WAF sensors.",
+    )
+    op: str = Field(
+        default="regex",
+        description="'regex' matches when the expression is found; '!regex' matches when it "
+        "is absent, which is how an allowlist is expressed.",
+    )
+    value: str = Field(default="", description="The regular expression itself.")
+    context: str = Field(
+        default="packet",
+        description="Part of the request the regex runs against: 'url', 'header', 'body' "
+        "or 'packet'.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> WafPattern:
+        """Project one pattern entry defensively."""
+        return cls(
+            key=str(raw.get("key", "pattern") or "pattern"),
+            op=str(raw.get("op", "regex") or "regex"),
+            value=str(raw.get("value", "") or ""),
+            context=str(raw.get("context", "packet") or "packet"),
+        )
+
+
+class WafRule(BaseModel):
+    """One rule inside a WAF sensor. Patterns within a rule are ANDed."""
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Rule name, unique within the sensor.")
+    id: int = Field(default=0, description="Controller-assigned rule id.")
+    cfg_type: str = Field(default="", description="'user_created', 'learned' or 'federal'.")
+    patterns: list[WafPattern] = Field(
+        default_factory=list,
+        description="Patterns that must ALL match for the rule to fire.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> WafRule:
+        """Project one rule entry defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            id=int(raw.get("id", 0) or 0),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            patterns=[WafPattern.from_api(p) for p in (raw.get("patterns") or [])],
+        )
+
+
+class WafSensorDetail(BaseModel):
+    """Result of ``nv_get_waf_sensor``: one sensor including its pattern bodies.
+
+    Unlike :class:`SensorBrief` this DOES return regex bodies, because you cannot
+    review or safely update a sensor without seeing what it matches.
+    """
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Sensor name; matches 'sensor' on threat events.")
+    comment: str = Field(default="", description="Operator comment.")
+    cfg_type: str = Field(default="", description="'user_created', 'learned' or 'federal'.")
+    predefined: bool = Field(
+        default=False,
+        description="True when the sensor ships with NeuVector. Predefined sensors cannot "
+        "be updated or deleted.",
+    )
+    groups: list[str] = Field(
+        default_factory=list,
+        description="Groups this sensor is bound to. Empty means the sensor inspects nothing.",
+    )
+    rules: list[WafRule] = Field(
+        default_factory=list, description="Rules the sensor carries. Rules are ORed."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> WafSensorDetail:
+        """Project a sensor detail body defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            predefined=bool(raw.get("predefine", raw.get("predefined", False))),
+            groups=[str(g) for g in (raw.get("groups") or [])],
+            rules=[WafRule.from_api(r) for r in (raw.get("rules") or [])],
+        )
+
+
+class WafGroupSensor(BaseModel):
+    """One sensor binding on a WAF group."""
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Bound sensor name.")
+    action: str = Field(
+        default="",
+        description="'deny' blocks the request when the group is in Protect mode and alerts "
+        "otherwise; 'allow' exempts a match from denial by another sensor.",
+    )
+    exist: bool = Field(
+        default=True,
+        description="False when the binding names a sensor that no longer exists.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> WafGroupSensor:
+        """Project one binding defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            action=str(raw.get("action", "") or ""),
+            exist=bool(raw.get("exist", True)),
+        )
+
+
+class WafGroup(BaseModel):
+    """WAF configuration attached to one group."""
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Group name.")
+    status: bool = Field(
+        default=False, description="True when WAF inspection is enabled for this group."
+    )
+    cfg_type: str = Field(default="", description="'learned', 'user_created' or 'federal'.")
+    sensors: list[WafGroupSensor] = Field(
+        default_factory=list,
+        description="Sensors bound to this group. Empty means nothing is inspected.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> WafGroup:
+        """Project one WAF group entry defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            status=bool(raw.get("status", False)),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            sensors=[WafGroupSensor.from_api(s) for s in (raw.get("sensors") or [])],
+        )
+
+
+class WafGroupList(BaseModel):
+    """Result of ``nv_list_waf_groups``."""
+
+    model_config = _BASE
+
+    page: Page
+    scope: str = Field(default="local", description="Scope the groups were read from.")
+    groups: list[WafGroup]
+
+
+class WafRuleCatalogEntry(BaseModel):
+    """One entry in the cluster-wide WAF rule catalogue."""
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Rule name.")
+    id: int = Field(default=0, description="Controller-assigned rule id.")
+    sensor: str = Field(default="", description="Sensor the rule belongs to, when reported.")
+    cfg_type: str = Field(default="", description="'user_created', 'learned' or 'federal'.")
+    patterns: list[WafPattern] = Field(default_factory=list, description="The rule's patterns.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> WafRuleCatalogEntry:
+        """Project one catalogue entry defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            id=int(raw.get("id", 0) or 0),
+            sensor=str(raw.get("sensor", "") or ""),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            patterns=[WafPattern.from_api(p) for p in (raw.get("patterns") or [])],
+        )
+
+
+class WafRuleList(BaseModel):
+    """Result of ``nv_list_waf_rules``."""
+
+    model_config = _BASE
+
+    page: Page
+    rules: list[WafRuleCatalogEntry]
 
 
 class AdmissionState(BaseModel):
@@ -2959,6 +3155,65 @@ class NetworkRuleInput(BaseModel):
         ge=0,
         description="Existing rule id. REQUIRED for configure_rules, must be omitted for "
         "insert_rules (the controller assigns the id).",
+    )
+
+
+class WafPatternInput(BaseModel):
+    """One regex pattern to write into a WAF rule.
+
+    No Appendix B schema exists for this body; the field names were confirmed by
+    writing a sensor to a live controller and reading it back unchanged.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: str = Field(
+        min_length=1,
+        description="The regular expression. The enforcer runs it against the chosen context "
+        "on every request, so anchor it and keep it cheap - a catastrophically backtracking "
+        "expression costs latency on real traffic.",
+    )
+    context: Literal["url", "header", "body", "packet"] = Field(
+        default="packet",
+        description="Which part of the request to match. 'header' covers request headers, "
+        "'url' the request line, 'body' the payload, 'packet' the raw bytes.",
+    )
+    op: Literal["regex", "!regex"] = Field(
+        default="regex",
+        description="'regex' fires when the expression matches. '!regex' fires when it does "
+        "NOT match, which is how you express an allowlist - be careful, an over-narrow "
+        "'!regex' fires on all legitimate traffic.",
+    )
+
+
+class WafRuleInput(BaseModel):
+    """One rule to write into a WAF sensor. Patterns within a rule are ANDed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=1,
+        description="Rule name, unique within the sensor. NeuVector's own rules use a "
+        "'rule.' prefix; following that convention keeps them readable in threat events.",
+    )
+    patterns: list[WafPatternInput] = Field(
+        min_length=1,
+        description="Patterns that must ALL match for this rule to fire. At least one is "
+        "required; a rule with no patterns would match nothing.",
+    )
+
+
+class WafSensorBindingInput(BaseModel):
+    """One sensor-to-group binding. Mirrors the entries under 'replace'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, description="Sensor name to bind. It must already exist.")
+    action: Literal["deny", "allow"] = Field(
+        default="deny",
+        description="'deny' blocks matching requests when the group is in Protect mode and "
+        "only raises a threat event in Monitor or Discover; 'allow' exempts a match from "
+        "denial by another sensor. Binding alone never blocks - the group's policy mode does.",
     )
 
 

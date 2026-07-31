@@ -1,0 +1,51 @@
+{
+  "waf_groups": [
+    {
+      "name": "nv.api.prod",
+      "status": true,
+      "cfg_type": "learned",
+      "sensors": [
+        {
+          "name": "sensor.log4shell",
+          "action": "deny",
+          "cfg_type": "user_created",
+          "comment": "Log4Shell",
+          "exist": true
+        }
+      ]
+    },
+    {
+      "name": "nv.web.prod",
+      "status": true,
+      "cfg_type": "learned",
+      "sensors": [
+        {
+          "name": "sensor.log4shell",
+          "action": "deny",
+          "cfg_type": "user_created",
+          "comment": "Log4Shell",
+          "exist": true
+        },
+        {
+          "name": "sensor.missing",
+          "action": "allow",
+          "cfg_type": "user_created",
+          "comment": "",
+          "exist": false
+        }
+      ]
+    },
+    {
+      "name": "nv.cache.prod",
+      "status": true,
+      "cfg_type": "learned",
+      "sensors": []
+    },
+    {
+      "name": "containers",
+      "status": false,
+      "cfg_type": "user_created",
+      "sensors": []
+    }
+  ]
+}

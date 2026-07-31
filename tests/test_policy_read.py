@@ -20,6 +20,8 @@ RULES = "/v1/policy/rule"
 RESPONSE_RULES = "/v1/response/rule"
 DLP_SENSORS = "/v1/dlp/sensor"
 WAF_SENSORS = "/v1/waf/sensor"
+WAF_GROUPS = "/v1/waf/group"
+WAF_RULES = "/v1/waf/rule"
 ADMISSION_STATE = "/v1/admission/state"
 ADMISSION_RULES = "/v1/admission/rules"
 ASSESS = "/v1/assess/admission/rule"
@@ -317,6 +319,116 @@ async def test_list_waf_sensors_truncates(client, nv_mock: respx.MockRouter) -> 
     assert route.calls.last.request.url.params["limit"] == "3"
     assert result.data.page.truncated is True
     assert result.data.page.returned == 2
+    assert "start=2" in result.data.page.hint
+
+
+# --- nv_get_waf_sensor ---------------------------------------------------------
+async def test_get_waf_sensor_returns_pattern_bodies(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(f"{WAF_SENSORS}/sensor.log4shell").respond(200, json=fixture("waf_sensor_detail"))
+    result = await client.call_tool("nv_get_waf_sensor", {"sensor_name": "sensor.log4shell"})
+
+    assert result.data.name == "sensor.log4shell"
+    assert result.data.groups == ["nv.api.prod", "nv.web.prod"]
+    assert [r.name for r in result.data.rules] == ["rule.log4shell", "rule.log4shell-url"]
+    # The list tool deliberately omits regex bodies; this one must return them.
+    assert result.data.rules[0].patterns[0].value == "\\$\\{jndi:"
+    assert result.data.rules[0].patterns[0].context == "header"
+    assert result.data.rules[0].id == 40000
+
+
+async def test_get_waf_sensor_reads_predefine_not_predefined(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    # The controller field is 'predefine'. Reading 'predefined' would silently
+    # report every shipped sensor as user-editable.
+    nv_mock.get(f"{WAF_SENSORS}/sensor.log4shell").respond(200, json=fixture("waf_sensor_detail"))
+    result = await client.call_tool("nv_get_waf_sensor", {"sensor_name": "sensor.log4shell"})
+    assert result.data.predefined is True
+
+
+async def test_get_waf_sensor_preserves_negative_op(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(f"{WAF_SENSORS}/sensor.log4shell").respond(200, json=fixture("waf_sensor_detail"))
+    result = await client.call_tool("nv_get_waf_sensor", {"sensor_name": "sensor.log4shell"})
+    ops = [p.op for p in result.data.rules[1].patterns]
+    assert ops == ["regex", "!regex"]
+
+
+async def test_get_waf_sensor_missing_raises(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(f"{WAF_SENSORS}/nope").respond(200, json={})
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool("nv_get_waf_sensor", {"sensor_name": "nope"})
+    assert "nope" in str(excinfo.value)
+
+
+# --- nv_list_waf_groups --------------------------------------------------------
+async def test_list_waf_groups_sends_scope_and_projects_bindings(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.get(WAF_GROUPS).respond(200, json=fixture("waf_groups"))
+    result = await client.call_tool("nv_list_waf_groups", {"scope": "fed"})
+
+    assert route.calls.last.request.url.params["scope"] == "fed"
+    assert result.data.scope == "fed"
+    assert [g.name for g in result.data.groups] == [
+        "nv.api.prod",
+        "nv.web.prod",
+        "nv.cache.prod",
+        "containers",
+    ]
+    assert result.data.groups[0].sensors[0].action == "deny"
+    # 'exist' false marks a binding pointing at a deleted sensor.
+    assert result.data.groups[1].sensors[1].exist is False
+
+
+async def test_list_waf_groups_bound_only_filters_unbound(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    nv_mock.get(WAF_GROUPS).respond(200, json=fixture("waf_groups"))
+    result = await client.call_tool("nv_list_waf_groups", {"bound_only": True})
+    assert [g.name for g in result.data.groups] == ["nv.api.prod", "nv.web.prod"]
+
+
+async def test_list_waf_groups_truncates(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(WAF_GROUPS).respond(200, json=fixture("waf_groups"))
+    result = await client.call_tool("nv_list_waf_groups", {"limit": 2})
+    assert result.data.page.truncated is True
+    assert result.data.page.returned == 2
+    assert "start=2" in result.data.page.hint
+
+
+# --- nv_get_waf_group ----------------------------------------------------------
+async def test_get_waf_group_projects_one_group(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(f"{WAF_GROUPS}/nv.api.prod").respond(
+        200, json={"waf_group": fixture("waf_groups")["waf_groups"][0]}
+    )
+    result = await client.call_tool("nv_get_waf_group", {"group_name": "nv.api.prod"})
+    assert result.data.name == "nv.api.prod"
+    assert result.data.status is True
+    assert [s.name for s in result.data.sensors] == ["sensor.log4shell"]
+
+
+async def test_get_waf_group_missing_raises(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(f"{WAF_GROUPS}/nope").respond(200, json={})
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool("nv_get_waf_group", {"group_name": "nope"})
+    assert "nope" in str(excinfo.value)
+
+
+# --- nv_list_waf_rules ---------------------------------------------------------
+async def test_list_waf_rules_projects_catalogue(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(WAF_RULES).respond(200, json=fixture("waf_rules"))
+    result = await client.call_tool("nv_list_waf_rules", {})
+    assert result.data.page.returned == 3
+    assert result.data.rules[0].id == 40000
+    assert result.data.rules[0].patterns[0].context == "header"
+    # A rule with no patterns must project as an empty list, not fail.
+    assert result.data.rules[2].patterns == []
+
+
+async def test_list_waf_rules_truncates(client, nv_mock: respx.MockRouter) -> None:
+    nv_mock.get(WAF_RULES).respond(200, json=fixture("waf_rules"))
+    result = await client.call_tool("nv_list_waf_rules", {"limit": 2})
+    assert result.data.page.truncated is True
     assert "start=2" in result.data.page.hint
 
 

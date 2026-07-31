@@ -40,6 +40,11 @@ from ..models import (
     ResponseRule,
     ResponseRuleList,
     SensorBrief,
+    WafGroup,
+    WafGroupList,
+    WafRuleCatalogEntry,
+    WafRuleList,
+    WafSensorDetail,
     WafSensorList,
 )
 
@@ -476,6 +481,176 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             ),
             scope=scope,
             sensors=[SensorBrief.from_api(item) for item in page_items],
+        )
+
+    @mcp.tool(
+        name="nv_get_waf_sensor",
+        annotations=READ_ONLY,
+        tags={"policy_read", "read"},
+    )
+    async def nv_get_waf_sensor(
+        ctx: Context,
+        sensor_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Sensor to read. Get exact names from nv_list_waf_sensors.",
+            ),
+        ],
+    ) -> WafSensorDetail:
+        """One WAF sensor including its rules and regex bodies.
+
+        This is the only tool that returns WAF pattern bodies; the list tool omits them.
+        Read a sensor before updating it: nv_update_waf_sensor replaces the rule list
+        wholesale, so an update built without seeing the current rules silently drops
+        the ones it omits. The 'groups' field tells you whether the sensor is actually
+        inspecting anything - a sensor bound to no group matches nothing.
+
+        Calls GET /v1/waf/sensor/{name}.
+        """
+        # VERIFIED (live controller 5.4): envelope key 'sensor'; the sensor carries
+        # name, comment, cfg_type, predefine, groups and rules[].patterns[].
+        app = app_context(ctx)
+        raw = await app.client.get_object(f"/v1/waf/sensor/{sensor_name}", "sensor")
+        if not raw:
+            raise NotFoundError(f"no WAF sensor named {sensor_name!r}")
+        return WafSensorDetail.from_api(raw)
+
+    @mcp.tool(
+        name="nv_list_waf_groups",
+        annotations=READ_ONLY,
+        tags={"policy_read", "read"},
+    )
+    async def nv_list_waf_groups(
+        ctx: Context,
+        scope: Annotated[
+            Literal["local", "fed"],
+            Field(description="'local' returns this cluster's groups, 'fed' federated ones."),
+        ] = "local",
+        bound_only: Annotated[
+            bool,
+            Field(
+                description="True returns only groups that have at least one sensor bound. "
+                "Most clusters have hundreds of groups and almost none bound, so this is "
+                "usually what you want."
+            ),
+        ] = False,
+        start: Annotated[int, Field(ge=0, description="Zero-based paging offset.")] = 0,
+        limit: Annotated[
+            int,
+            Field(ge=1, le=1000, description="Maximum groups to return. Capped by NV_MAX_ITEMS."),
+        ] = 50,
+    ) -> WafGroupList:
+        """Which groups have WAF inspection enabled and which sensors are bound to them.
+
+        A sensor only inspects traffic once it is bound to a group here, and it only
+        BLOCKS once that group's policy mode is Protect - in Discover or Monitor a
+        match raises a threat event and the request proceeds. Use this to answer
+        'is this sensor actually doing anything'.
+
+        Calls GET /v1/waf/group with scope.
+        """
+        # VERIFIED (live controller 5.4): envelope key 'waf_groups'; each entry carries
+        # name, status, cfg_type and sensors[] of {name, action, exist}.
+        app = app_context(ctx)
+        effective_limit = min(limit, app.settings.max_items)
+
+        params = build_query(extra={"scope": scope})
+        items = await app.client.get_list("/v1/waf/group", "waf_groups", params=params)
+        if bound_only:
+            items = [item for item in items if (item.get("sensors") or [])]
+
+        window = items[start : start + effective_limit + 1]
+        truncated = len(window) > effective_limit
+        page_items = window[:effective_limit]
+        return WafGroupList(
+            page=Page(
+                start=start,
+                returned=len(page_items),
+                truncated=truncated,
+                hint=(
+                    f"More WAF groups exist. Call again with start={start + len(page_items)}."
+                    if truncated
+                    else None
+                ),
+            ),
+            scope=scope,
+            groups=[WafGroup.from_api(item) for item in page_items],
+        )
+
+    @mcp.tool(
+        name="nv_get_waf_group",
+        annotations=READ_ONLY,
+        tags={"policy_read", "read"},
+    )
+    async def nv_get_waf_group(
+        ctx: Context,
+        group_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Group to read, e.g. 'nv.api.prod'. Names come from nv_list_groups.",
+            ),
+        ],
+    ) -> WafGroup:
+        """WAF configuration for one group: inspection status and bound sensors.
+
+        Read this before nv_set_waf_group. That tool's 'sensors' argument REPLACES the
+        binding list rather than adding to it, so an update built without the current
+        list unbinds whatever it leaves out.
+
+        Calls GET /v1/waf/group/{name}.
+        """
+        # VERIFIED (live controller 5.4): envelope key 'waf_group'.
+        app = app_context(ctx)
+        raw = await app.client.get_object(f"/v1/waf/group/{group_name}", "waf_group")
+        if not raw:
+            raise NotFoundError(f"no WAF configuration for group {group_name!r}")
+        return WafGroup.from_api(raw)
+
+    @mcp.tool(
+        name="nv_list_waf_rules",
+        annotations=READ_ONLY,
+        tags={"policy_read", "read"},
+    )
+    async def nv_list_waf_rules(
+        ctx: Context,
+        start: Annotated[int, Field(ge=0, description="Zero-based paging offset.")] = 0,
+        limit: Annotated[
+            int,
+            Field(ge=1, le=1000, description="Maximum rules to return. Capped by NV_MAX_ITEMS."),
+        ] = 50,
+    ) -> WafRuleList:
+        """The cluster-wide WAF rule catalogue, across every sensor.
+
+        Rules are owned by sensors, so nv_get_waf_sensor is the better tool when you
+        know which sensor you care about. This one answers the cross-cutting question:
+        which rule ids exist, and does the name I am about to create collide.
+
+        Calls GET /v1/waf/rule.
+        """
+        # VERIFIED (live controller 5.4): envelope key 'rules'. Catalogue entries name
+        # rules '<sensor>_<hash>.<rule>' and carry no separate 'sensor' field, so
+        # WafRuleCatalogEntry.sensor stays empty unless a controller starts sending one.
+        app = app_context(ctx)
+        effective_limit = min(limit, app.settings.max_items)
+
+        items = await app.client.get_list("/v1/waf/rule", "rules")
+        window = items[start : start + effective_limit + 1]
+        truncated = len(window) > effective_limit
+        page_items = window[:effective_limit]
+        return WafRuleList(
+            page=Page(
+                start=start,
+                returned=len(page_items),
+                truncated=truncated,
+                hint=(
+                    f"More WAF rules exist. Call again with start={start + len(page_items)}."
+                    if truncated
+                    else None
+                ),
+            ),
+            rules=[WafRuleCatalogEntry.from_api(item) for item in page_items],
         )
 
     @mcp.tool(
