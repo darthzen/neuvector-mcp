@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 PY      ?= python3
 IMAGE   ?= neuvector-mcp
-TAG     ?= 1.0.0
+TAG     ?= 1.0.1
 REGISTRY?= localhost:5000
 
 .PHONY: help

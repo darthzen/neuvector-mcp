@@ -36,7 +36,7 @@ from .tools import (
 log = structlog.get_logger(__name__)
 
 SERVER_NAME = "neuvector"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.0.1"
 
 #: Every toolset module, in registration order. Each exposes
 #: ``register(mcp, settings)`` and is responsible for checking whether its own
