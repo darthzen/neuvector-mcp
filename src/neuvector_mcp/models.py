@@ -230,6 +230,9 @@ def count_by_level(items: list[dict[str, Any]]) -> dict[str, int]:
 #:   json_key              RESTGCRKeyConfig
 #:   personal_access_token RESTRemoteRepo_GitHubConfig
 #:   apikey_secret         RESTApikey, RESTApikeyGenerated
+#:   temp_token            RESTImportTask - a bearer token that resumes an in-flight
+#:                         config import, so it authorises the most destructive call
+#:                         in the API until the import finishes
 SECRET_FIELDS: frozenset[str] = frozenset(
     {
         "password",
@@ -239,6 +242,7 @@ SECRET_FIELDS: frozenset[str] = frozenset(
         "json_key",
         "personal_access_token",
         "apikey_secret",
+        "temp_token",
     }
 )
 
@@ -3382,4 +3386,758 @@ class RepositoryScanReport(BaseModel):
                 ),
             ),
             vulnerabilities=[VulnerabilityFinding.from_api(v) for v in shown],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Write-tool input models, grouped by the tool module that consumes them.
+# Each block below is owned by exactly one module; add to your own block only.
+# ---------------------------------------------------------------------------
+
+# --- inputs for tools/dlp.py (P1) ---
+# Wire shapes below come from the upstream Go structs, not from guesswork:
+# RESTDlpSensorConfig / RESTDlpRule / RESTDlpCriteriaEntry / RESTDlpGroupConfig /
+# RESTDlpConfig / RESTDlpSensor / RESTDlpGroup / RESTDlpSetting in apis.go (5.6.0).
+# The block also carries this module's OUTPUT projections: the DLP read tools that
+# resolve names before a write live in tools/dlp.py, and gate rule R7 requires each
+# of them to declare a structured model. ``SensorBrief``/``DlpSensorList`` already
+# exist above for ``nv_list_dlp_sensors`` and are reused rather than duplicated.
+
+#: apis.go ``DlpRulePatternMaxNum`` - patterns allowed in one DLP rule.
+DLP_RULE_PATTERN_MAX_NUM = 16
+#: apis.go ``DlpRulePatternMaxLen`` - characters allowed in one pattern.
+DLP_RULE_PATTERN_MAX_LEN = 512
+#: apis.go ``DlpRulePatternTotalMaxLen`` - total pattern characters in one rule.
+DLP_RULE_PATTERN_TOTAL_MAX_LEN = 1024
+#: apis.go ``DlpSensorNameMaxLen`` / ``DlpRuleNameMaxLen``.
+DLP_NAME_MAX_LEN = 256
+#: apis.go ``DlpRuleCommentMaxLen``. The only comment field DLP exposes is on the
+#: sensor (``RESTDlpSensor.Comment``); no DLP rule carries one.
+DLP_COMMENT_MAX_LEN = 256
+
+
+class DlpPatternInput(BaseModel):
+    """One regex pattern to write into a DLP rule.
+
+    Mirrors ``RESTDlpCriteriaEntry`` in apis.go: ``key``, ``value``, ``op`` are
+    always sent; ``context`` is ``json:"context,omitempty"`` and is therefore
+    omitted from the body unless the caller sets it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: str = Field(
+        min_length=1,
+        max_length=DLP_RULE_PATTERN_MAX_LEN,
+        description="The regular expression matched against traffic leaving the group. DLP "
+        "runs it on live packets, so anchor it and keep it cheap - a catastrophically "
+        "backtracking expression costs latency on real traffic.",
+    )
+    op: Literal["regex", "!regex"] = Field(
+        default="regex",
+        description="'regex' fires when the expression matches. '!regex' fires when it does "
+        "NOT match, which is how an allowlist is expressed - an over-narrow '!regex' fires "
+        "on every legitimate byte of traffic.",
+    )
+    context: Literal["url", "header", "body", "packet"] | None = Field(
+        default=None,
+        description="Which part of the traffic to match. Optional: when omitted the field is "
+        "left out of the request entirely and the controller applies its own default. "
+        "apis.go marks it 'omitempty' and documents no value set for DLP, so leave it unset "
+        "unless you are copying a value read back from nv_get_dlp_sensor.",
+    )
+
+
+class DlpRuleInput(BaseModel):
+    """One rule to write into a DLP sensor. Patterns within a rule are ANDed.
+
+    Mirrors ``RESTDlpRule``. ``id`` and ``cfg_type`` exist on that struct but are
+    controller-assigned (ids start at ``MinDlpRuleID`` = 20000), so they are not
+    accepted here and are not sent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=1,
+        max_length=DLP_NAME_MAX_LEN,
+        description="Rule name, unique within the sensor. It is what identifies the match in "
+        "a threat event, so name it after the data it protects, e.g. 'rule.card-pan'.",
+    )
+    patterns: list[DlpPatternInput] = Field(
+        min_length=1,
+        max_length=DLP_RULE_PATTERN_MAX_NUM,
+        description="Patterns that must ALL match for this rule to fire. At least one is "
+        "required; the controller caps a rule at 16.",
+    )
+
+
+class DlpSensorBindingInput(BaseModel):
+    """One sensor-to-group binding. Mirrors ``RESTDlpConfig`` under 'replace'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=1,
+        max_length=DLP_NAME_MAX_LEN,
+        description="Sensor name to bind. It must already exist; check with nv_get_dlp_sensor.",
+    )
+    action: Literal["deny", "allow"] = Field(
+        default="deny",
+        description="'deny' DROPS matching traffic once the group is in Protect mode and only "
+        "raises a threat event in Monitor or Discover; 'allow' exempts a match from denial by "
+        "another sensor. Binding alone never drops traffic - the group's policy mode does.",
+    )
+
+
+class DlpPattern(BaseModel):
+    """One regex pattern inside a DLP rule, as the controller reports it."""
+
+    model_config = _BASE
+
+    key: str = Field(
+        default="pattern",
+        description="Match kind. The controller only emits 'pattern' for DLP sensors.",
+    )
+    op: str = Field(
+        default="regex",
+        description="'regex' matches when the expression is found; '!regex' when it is absent.",
+    )
+    value: str = Field(default="", description="The regular expression itself.")
+    context: str = Field(
+        default="",
+        description="Part of the traffic the regex runs against. Empty when the controller "
+        "did not report one; apis.go marks the field optional.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> DlpPattern:
+        """Project one pattern entry defensively."""
+        return cls(
+            key=str(raw.get("key", "pattern") or "pattern"),
+            op=str(raw.get("op", "regex") or "regex"),
+            value=str(raw.get("value", "") or ""),
+            context=str(raw.get("context", "") or ""),
+        )
+
+
+class DlpRule(BaseModel):
+    """One rule inside a DLP sensor. Patterns within a rule are ANDed."""
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Rule name, unique within the sensor.")
+    id: int = Field(default=0, description="Controller-assigned rule id.")
+    cfg_type: str = Field(default="", description="'user_created', 'ground' or 'federal'.")
+    patterns: list[DlpPattern] = Field(
+        default_factory=list, description="Patterns that must ALL match for the rule to fire."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> DlpRule:
+        """Project one rule entry defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            id=int(raw.get("id", 0) or 0),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            patterns=[DlpPattern.from_api(p) for p in (raw.get("patterns") or [])],
+        )
+
+
+class DlpSensorDetail(BaseModel):
+    """Result of ``nv_get_dlp_sensor``: one sensor including its pattern bodies.
+
+    Unlike :class:`SensorBrief` this DOES return regex bodies, because you cannot
+    review or safely update a sensor without seeing what it matches. Projected
+    from ``RESTDlpSensor`` in apis.go.
+    """
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Sensor name; matches 'sensor' on threat events.")
+    comment: str = Field(default="", description="Operator comment, clipped to 500 characters.")
+    cfg_type: str = Field(default="", description="'user_created', 'ground' or 'federal'.")
+    predefined: bool = Field(
+        default=False,
+        description="True when the sensor ships with NeuVector. Predefined sensors cannot be "
+        "updated or deleted, but they can be bound to a group.",
+    )
+    groups: list[str] = Field(
+        default_factory=list,
+        description="Groups this sensor is bound to. Empty means the sensor inspects nothing.",
+    )
+    rules: list[DlpRule] = Field(
+        default_factory=list, description="Rules the sensor carries. Rules are ORed."
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> DlpSensorDetail:
+        """Project a sensor detail body defensively."""
+        # apis.go RESTDlpSensor: name, groups, rules, comment, predefine, cfg_type.
+        # 'predefine' is the wire spelling; 'predefined' is read as a fallback only.
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            predefined=bool(raw.get("predefine", raw.get("predefined", False))),
+            groups=[str(g) for g in (raw.get("groups") or [])],
+            rules=[DlpRule.from_api(r) for r in (raw.get("rules") or [])],
+        )
+
+
+class DlpGroupSensor(BaseModel):
+    """One sensor binding on a DLP group. Projected from ``RESTDlpSetting``."""
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Bound sensor name.")
+    action: str = Field(
+        default="",
+        description="'deny' drops matching traffic when the group is in Protect mode and "
+        "alerts otherwise; 'allow' exempts a match from denial by another sensor.",
+    )
+    exist: bool = Field(
+        default=True,
+        description="False when the binding names a sensor that no longer exists.",
+    )
+    predefined: bool = Field(
+        default=False,
+        description="True when the bound sensor ships with NeuVector. DLP has predefined "
+        "sensors (credit-card and social-security patterns) that WAF does not.",
+    )
+    comment: str = Field(default="", description="Comment carried on the binding, when set.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> DlpGroupSensor:
+        """Project one binding defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            action=str(raw.get("action", "") or ""),
+            exist=bool(raw.get("exist", True)),
+            predefined=bool(raw.get("predefine", raw.get("predefined", False))),
+            comment=_clip(str(raw.get("comment", "") or ""), 500)[0],
+        )
+
+
+class DlpGroup(BaseModel):
+    """DLP configuration attached to one group. Projected from ``RESTDlpGroup``."""
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Group name.")
+    status: bool = Field(
+        default=False, description="True when DLP inspection is enabled for this group."
+    )
+    cfg_type: str = Field(default="", description="'learned', 'user_created' or 'federal'.")
+    sensors: list[DlpGroupSensor] = Field(
+        default_factory=list,
+        description="Sensors bound to this group. Empty means nothing is inspected.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> DlpGroup:
+        """Project one DLP group entry defensively."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            status=bool(raw.get("status", False)),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            sensors=[DlpGroupSensor.from_api(s) for s in (raw.get("sensors") or [])],
+        )
+
+
+class DlpGroupList(BaseModel):
+    """Result of ``nv_list_dlp_groups``."""
+
+    model_config = _BASE
+
+    page: Page
+    groups: list[DlpGroup]
+
+
+# --- inputs for tools/response_write.py (P2) ---
+class ResponseRuleConditionInput(BaseModel):
+    """One extra match condition on a response rule.
+
+    Field names from apis.go ``v1.EventCondition`` as rendered by
+    ``RESTCLUSEventCondition`` in apis.yaml: exactly ``type`` and ``value``, both
+    plain strings. The controller defines which condition types are valid per
+    event category; read them from ``nv_get_response_rule_options`` rather than
+    guessing, because an unknown type is stored and then never matches.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(
+        min_length=1,
+        description="Condition type, verbatim as the controller names it, e.g. the values "
+        "reported under 'types' by nv_get_response_rule_options for this event.",
+    )
+    value: str = Field(
+        description="Value the condition tests for. May be empty when the type takes none."
+    )
+
+
+class ResponseRuleInput(BaseModel):
+    """One response rule to insert. Mirrors ``RESTResponseRule`` (apis.go).
+
+    ``id`` and ``cfg_type`` are deliberately absent: the controller assigns the id
+    on insert, and the tool always writes ``cfg_type="user_created"`` because
+    federated response rules can only be authored on a federation primary.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    event: str = Field(
+        min_length=1,
+        description="Event category that triggers the rule, verbatim as the controller names "
+        "it. Get the valid set from nv_get_response_rule_options; an unknown event is "
+        "stored and then never fires.",
+    )
+    actions: list[str] = Field(
+        min_length=1,
+        description="What the controller does when the rule matches, e.g. suppressing the "
+        "log, quarantining the workload, or calling a webhook. Get the valid names from "
+        "nv_get_response_rule_options. A rule with no actions does nothing, so at least one "
+        "is required here.",
+    )
+    group: str = Field(
+        default="",
+        description="Group the rule is scoped to. Empty means every workload in the cluster - "
+        "that is the widest possible blast radius for a quarantine action, so name a group "
+        "unless you mean it.",
+    )
+    webhooks: list[str] = Field(
+        default_factory=list,
+        description="Names of configured webhook targets to notify. Names only, never URLs - "
+        "the destination lives on the webhook object. A name that does not exist is a "
+        "dangling reference: the rule stores it and the notification silently never arrives. "
+        "Create the target first with nv_create_webhook, or list existing names with "
+        "nv_get_response_rule_options.",
+    )
+    conditions: list[ResponseRuleConditionInput] = Field(
+        default_factory=list,
+        description="Extra match conditions ANDed onto the event. Empty means the rule matches "
+        "every event of this category.",
+    )
+    comment: str = Field(
+        default="",
+        description="Free-text comment stored on the rule. Say why the rule exists; it is the "
+        "only provenance an operator gets later.",
+    )
+    disable: bool = Field(
+        default=False,
+        description="True stores the rule but does not act on it. Insert a quarantine rule "
+        "disabled first, confirm which events it matches, then enable it.",
+    )
+
+
+class ResponseRuleEventOptions(BaseModel):
+    """Valid response-rule settings for one event category.
+
+    Projection of ``RESTResponseRuleOptions`` (apis.go). The precise meaning of
+    ``types`` is not stated in apis.go, apis.yaml or Appendix B - the controller
+    returns it per event category and the console offers it as the condition-type
+    picker. It is passed through verbatim rather than reinterpreted.
+    """
+
+    model_config = _BASE
+
+    types: list[str] = Field(
+        default_factory=list,
+        description="Values the controller offers for this event, passed through verbatim. "
+        "Used as response-rule condition types.",
+    )
+    names: list[str] = Field(
+        default_factory=list, description="Named sub-selectors the controller offers, if any."
+    )
+    levels: list[str] = Field(
+        default_factory=list, description="Severity levels this event category can be filtered on."
+    )
+    disabled_properties: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Controller field 'disabled_props': properties the console greys out for "
+        "this event, keyed by property name.",
+    )
+
+
+class ResponseRuleOptions(BaseModel):
+    """Result of ``nv_get_response_rule_options``: the response-rule vocabulary."""
+
+    model_config = _BASE
+
+    events: list[str] = Field(
+        default_factory=list,
+        description="Event categories a response rule may react to; use one of these verbatim "
+        "as ResponseRuleInput.event.",
+    )
+    options: dict[str, ResponseRuleEventOptions] = Field(
+        default_factory=dict, description="Per-event options, keyed by event category."
+    )
+    webhooks: list[str] = Field(
+        default_factory=list,
+        description="Names of webhooks currently configured on this cluster. These are the "
+        "only values ResponseRuleInput.webhooks may contain. Names only - URLs are never "
+        "returned by this server.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> ResponseRuleOptions:
+        """Project ``RESTResponseRuleOptionData`` (apis.go)."""
+        by_event = raw.get("response_rule_options") or {}
+        options: dict[str, ResponseRuleEventOptions] = {}
+        if isinstance(by_event, dict):
+            for event, value in by_event.items():
+                entry = value if isinstance(value, dict) else {}
+                raw_props = entry.get("disabled_props") or {}
+                options[str(event)] = ResponseRuleEventOptions(
+                    types=[str(t) for t in (entry.get("types") or [])],
+                    names=[str(n) for n in (entry.get("name") or [])],
+                    levels=[str(level) for level in (entry.get("level") or [])],
+                    disabled_properties={
+                        str(k): [str(v) for v in (values or [])]
+                        for k, values in (raw_props.items() if isinstance(raw_props, dict) else [])
+                    },
+                )
+        return cls(
+            events=sorted(options),
+            options=options,
+            webhooks=[str(w) for w in (raw.get("webhooks") or [])],
+        )
+
+
+# --- inputs for tools/vulnerability_write.py (P3) ---
+class VulnerabilityProfileEntryInput(BaseModel):
+    """One CVE suppression entry to write. Mirrors ``RESTVulnerabilityProfileEntry``.
+
+    Field names match :class:`VulnerabilityProfileEntry`, the model
+    ``nv_get_vulnerability_profile`` returns, so an entry read from the profile
+    can be passed straight back in without renaming anything.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=1,
+        description="CVE id this entry SUPPRESSES, e.g. 'CVE-2020-29661'. While the entry "
+        "exists this CVE stops being reported for everything the entry's scope covers, so "
+        "it disappears from nv_get_scan_report and from the counts every other "
+        "vulnerability tool returns.",
+    )
+    comment: str = Field(
+        min_length=1,
+        description="Why the exception exists. Required by this server even though the "
+        "controller accepts an empty string: it is the only provenance an operator gets "
+        "when they later ask why a CVE stopped being reported. Name the approver and the "
+        "ticket.",
+    )
+    id: int = Field(
+        default=0,
+        ge=0,
+        description="Controller-assigned entry id, from nv_get_vulnerability_profile. Leave "
+        "at 0 when adding a new entry - the controller assigns the real id.",
+    )
+    days: int = Field(
+        default=0,
+        ge=0,
+        description="Grace period in days, and ONLY meaningful for the two built-in 'recent "
+        "vulnerability' profiles. 0, the default, means the suppression never expires on its "
+        "own.",
+    )
+    namespaces: list[str] = Field(
+        default_factory=list,
+        description="Kubernetes namespaces the suppression is limited to (controller field "
+        "'domains'). EMPTY MEANS CLUSTER-WIDE - the CVE is hidden everywhere. Always prefer "
+        "the narrowest list that covers the accepted risk.",
+    )
+    images: list[str] = Field(
+        default_factory=list,
+        description="Image patterns the suppression is limited to. EMPTY MEANS EVERY IMAGE. "
+        "Combined with namespaces as an intersection by the controller.",
+    )
+
+
+# --- inputs for tools/compliance_write.py (P4) ---
+# Wire shapes below come from apis.go (5.6.0), not from the read models:
+# RESTComplianceProfileEntry and RESTCustomCheck. apis.yaml agrees on every field
+# it documents but omits RESTCustomCheck.configurable, so apis.go wins there.
+
+
+class ComplianceProfileEntryInput(BaseModel):
+    """One per-check tag override to write. Mirrors apis.go ``RESTComplianceProfileEntry``.
+
+    The read-side projection of the same object is ``ComplianceProfileEntry``
+    above; the field vocabulary is deliberately identical so a value read from
+    ``nv_get_compliance_profile`` can be sent straight back.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    test_number: str = Field(
+        min_length=1,
+        description="Check id this override applies to, e.g. 'K.1.2.3'. The controller calls "
+        "it test_number, not name. Ids come from GET /v1/list/compliance or from the entries "
+        "of nv_get_compliance_profile.",
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Compliance standards the check counts towards: PCI, PCIv4, GDPR, HIPAA, "
+        "NIST or DISA. An empty list means the check counts towards no standard.",
+    )
+
+
+class CustomComplianceScriptInput(BaseModel):
+    """One custom compliance check script. Mirrors apis.go ``RESTCustomCheck``.
+
+    DANGEROUS BY DESIGN: ``script`` is a shell script that the NeuVector enforcer
+    executes on every node running the group this check is attached to.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=1,
+        description="Script name. This is the identity used to update or delete it later; "
+        "reusing an existing name overwrites that script.",
+    )
+    script: str = Field(
+        min_length=1,
+        description="Shell script body, EXECUTED ON THE NODE by the enforcer on every "
+        "compliance scan. The check's result comes from what the script writes and its exit "
+        "status. Never send a script you have not read line by line.",
+    )
+    configurable: bool = Field(
+        default=False,
+        description="Controller flag on RESTCustomCheck whose meaning is not documented in "
+        "apis.yaml or Appendix B; it does not appear to affect whether the script runs. "
+        "Leave False unless you are copying a value back from GET /v1/custom_check/{group}.",
+    )
+
+
+# --- inputs for tools/ruleset_ops.py (P5) ---
+
+# --- inputs for tools/service_ops.py (P7) ---
+
+# --- inputs for tools/sigstore.py (P6) ---
+# Wire field names below come from apis.go (5.6.0) REST_SigstoreRootOfTrust_GET
+# and REST_SigstoreVerifier. apis.yaml agrees on every field name; where the two
+# disagree on the collection envelope (yaml declares a bare array, apis.go
+# declares {"roots_of_trust": [...]} / {"verifiers": [...]}) apis.go wins, per
+# the house rule. Nothing here is a secret: a sigstore verifier carries only
+# PUBLIC keys (``public_key``) and keyless certificate identities
+# (``cert_issuer`` / ``cert_subject``); no private key or credential field exists
+# on any of the sigstore structs, so these models are NOT run through
+# redact_secrets and none of their field names appear in SECRET_FIELDS.
+
+
+class SigstoreVerifierEntry(BaseModel):
+    """One sigstore verifier: how a signature on an image is checked.
+
+    Projection of apis.go ``REST_SigstoreVerifier``. All six fields are declared
+    non-pointer without ``omitempty``, so the controller always emits all six.
+    """
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Verifier name, unique within its root of trust.")
+    verifier_type: str = Field(
+        default="",
+        description="'keypair' verifies against 'public_key'; 'keyless' verifies the signing "
+        "certificate's identity against 'cert_issuer' and 'cert_subject'.",
+    )
+    public_key: str = Field(
+        default="",
+        description="Cosign PUBLIC key in PEM form, used when verifier_type='keypair'. This is "
+        "public material, not a credential.",
+    )
+    cert_issuer: str = Field(
+        default="",
+        description="Keyless: OIDC issuer the signing certificate must come from, e.g. "
+        "'https://token.actions.githubusercontent.com'. Empty means ANY issuer is accepted.",
+    )
+    cert_subject: str = Field(
+        default="",
+        description="Keyless: identity the signing certificate must carry, e.g. a workflow "
+        "URI or an email. Empty means ANY subject is accepted.",
+    )
+    comment: str = Field(default="", description="Free-text note stored with the verifier.")
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> SigstoreVerifierEntry:
+        """Project one ``REST_SigstoreVerifier``; every field defaults to ''."""
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            verifier_type=str(raw.get("verifier_type", "") or ""),
+            public_key=str(raw.get("public_key", "") or ""),
+            cert_issuer=str(raw.get("cert_issuer", "") or ""),
+            cert_subject=str(raw.get("cert_subject", "") or ""),
+            comment=str(raw.get("comment", "") or ""),
+        )
+
+
+class SigstoreRootOfTrust(BaseModel):
+    """One sigstore root of trust and the verifiers hanging off it.
+
+    Projection of apis.go ``REST_SigstoreRootOfTrust_GET``.
+    """
+
+    model_config = _BASE
+
+    name: str = Field(default="", description="Root of trust name; the id every other tool takes.")
+    is_private: bool = Field(
+        default=False,
+        description="True when this root uses privately supplied Fulcio/Rekor material rather "
+        "than the public sigstore instance.",
+    )
+    rootless_keypairs_only: bool = Field(
+        default=False,
+        description="True restricts this root to bare keypair verifiers. apis.yaml notes it "
+        "overrides 'is_private'.",
+    )
+    rekor_public_key: str = Field(
+        default="", description="PEM public key of the Rekor transparency log. Public material."
+    )
+    root_cert: str = Field(default="", description="PEM Fulcio root certificate. Public material.")
+    sct_public_key: str = Field(
+        default="",
+        description="PEM public key used to verify the signed certificate timestamp. Public "
+        "material.",
+    )
+    cfg_type: str = Field(
+        default="",
+        description="user_created | ground | federal. Ground and federal roots are owned by "
+        "config import or by the federation primary and cannot be edited here.",
+    )
+    comment: str = Field(default="", description="Free-text note stored with the root.")
+    verifiers: list[SigstoreVerifierEntry] = Field(
+        default_factory=list,
+        description="Verifiers defined under this root. Deleting the root deletes all of them.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> SigstoreRootOfTrust:
+        """Project one ``REST_SigstoreRootOfTrust_GET``; absent keys become empty."""
+        raw_verifiers = raw.get("verifiers")
+        return cls(
+            name=str(raw.get("name", "") or ""),
+            is_private=bool(raw.get("is_private", False)),
+            rootless_keypairs_only=bool(raw.get("rootless_keypairs_only", False)),
+            rekor_public_key=str(raw.get("rekor_public_key", "") or ""),
+            root_cert=str(raw.get("root_cert", "") or ""),
+            sct_public_key=str(raw.get("sct_public_key", "") or ""),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
+            comment=str(raw.get("comment", "") or ""),
+            verifiers=[
+                SigstoreVerifierEntry.from_api(v)
+                for v in (raw_verifiers if isinstance(raw_verifiers, list) else [])
+                if isinstance(v, dict)
+            ],
+        )
+
+
+class SigstoreRootList(BaseModel):
+    """Result of ``nv_list_sigstore_roots``."""
+
+    model_config = _BASE
+
+    page: Page
+    roots_of_trust: list[SigstoreRootOfTrust]
+
+
+class SigstoreVerifierList(BaseModel):
+    """Result of ``nv_list_sigstore_verifiers``."""
+
+    model_config = _BASE
+
+    page: Page
+    root_name: str = Field(description="Root of trust these verifiers belong to.")
+    verifiers: list[SigstoreVerifierEntry]
+
+
+# --- inputs for tools/config_transfer.py (P8) ---
+# Field names below come from apis.go (5.6.0) ``RESTImportTask`` /
+# ``RESTImportTaskData``; apis.yaml and appendix B agree on every one of them.
+# This is an OUTPUT projection rather than an ``*Input`` model: P8's only
+# non-mutating tool, nv_get_import_status, needs a structured return type and
+# every model in this server lives here.
+
+
+class ImportTaskStatus(BaseModel):
+    """Result of ``nv_get_import_status``: progress of the most recent config import.
+
+    Projects ``RESTImportTask``. Two upstream fields are deliberately dropped:
+
+    * ``temp_token`` - a bearer token the controller issues so a transactional
+      import can be resumed. It is a credential in everything but name and is
+      not in :data:`SECRET_FIELDS`, so it is never surfaced.
+    * ``ctrler_id`` - the controller replica that owns the task; of no use to a
+      caller who cannot address a specific replica.
+    """
+
+    model_config = _BASE
+
+    task_id: str = Field(
+        default="", description="Controller field 'tid'. Identifies this import run."
+    )
+    percentage: int = Field(
+        default=0,
+        description="Progress 0-100. 100 does NOT by itself mean success - read 'status'.",
+    )
+    status: str = Field(
+        default="",
+        description="Controller's own status word, e.g. 'done' or 'importing'. Free-form: "
+        "apis.yaml declares no enum, so do not branch on an exact value without checking it.",
+    )
+    triggered_by: str = Field(
+        default="", description="Fully qualified name of the user whose credential ran the import."
+    )
+    last_update_time: str = Field(
+        default="", description="RFC3339 timestamp of the last progress update."
+    )
+    fail_to_decrypt_key_fields: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Non-empty means the import PARTIALLY failed: the listed cloaked fields "
+        "(credentials, certificates) could not be decrypted and were NOT restored, keyed by "
+        "the configuration key they belong to. The rest of the import still applied.",
+    )
+    running: bool = Field(
+        default=False,
+        description="Derived, not a controller field: True when the controller reported a task "
+        "whose percentage is below 100. False also means 'no import has ever run' when task_id "
+        "is empty.",
+    )
+    note: str = Field(
+        default="",
+        description="How to read this result, including what an empty task_id means.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> ImportTaskStatus:
+        """Project a ``RESTImportTaskData``: ``{"data": RESTImportTask}``."""
+        task = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+        task = task or {}
+        decrypt_failures: dict[str, list[str]] = {}
+        for key, values in (task.get("fail_to_decrypt_key_fields") or {}).items():
+            decrypt_failures[str(key)] = [str(v) for v in (values or [])]
+        task_id = str(task.get("tid", "") or "")
+        percentage = int(task.get("percentage") or 0)
+        return cls(
+            task_id=task_id,
+            percentage=percentage,
+            status=str(task.get("status", "") or ""),
+            triggered_by=str(task.get("triggered_by", "") or ""),
+            last_update_time=str(task.get("last_update_time", "") or ""),
+            fail_to_decrypt_key_fields=decrypt_failures,
+            running=bool(task_id) and percentage < 100,
+            note=(
+                "No import task is recorded on this controller; either none has run or the "
+                "record was cleared."
+                if not task_id
+                else (
+                    "fail_to_decrypt_key_fields is non-empty: the listed fields were NOT "
+                    "restored. Re-enter those credentials by hand."
+                    if decrypt_failures
+                    else "Verify the imported objects by reading them back; a finished import "
+                    "task is not proof that every rule in the file was accepted."
+                )
+            ),
         )
