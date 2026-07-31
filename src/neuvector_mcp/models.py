@@ -60,9 +60,16 @@ class WorkloadBrief(BaseModel):
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> WorkloadBrief:
-        """Project a ``RESTWorkload``/``RESTWorkloadV2`` brief section."""
-        brief = raw.get("workload_brief") or raw
-        scan = brief.get("scan_summary") or {}
+        """Project a ``RESTWorkload``/``RESTWorkloadV2`` item.
+
+        v2 splits one workload across three places: identity under ``brief``,
+        policy and vulnerability counts under ``security``, and ``running`` at
+        the item's top level. Flat payloads keep everything at the top level, so
+        each section falls back to ``raw``.
+        """
+        brief = raw.get("brief") or raw.get("workload_brief") or raw
+        security = raw.get("security") or raw
+        scan = security.get("scan_summary") or brief.get("scan_summary") or {}
         return cls(
             id=str(brief.get("id", "")),
             name=str(brief.get("name", "")),
@@ -70,11 +77,11 @@ class WorkloadBrief(BaseModel):
             service=str(brief.get("service", "") or ""),
             image=str(brief.get("image", "") or ""),
             state=str(brief.get("state", "") or ""),
-            policy_mode=str(brief.get("policy_mode", "") or ""),  # type: ignore[arg-type]
-            high_vuls=int(brief.get("high") or scan.get("high") or 0),
-            med_vuls=int(brief.get("medium") or scan.get("medium") or 0),
+            policy_mode=str(security.get("policy_mode", "") or ""),  # type: ignore[arg-type]
+            high_vuls=int(scan.get("high") or brief.get("high") or 0),
+            med_vuls=int(scan.get("medium") or brief.get("medium") or 0),
             host_name=str(brief.get("host_name", "") or ""),
-            running=bool(brief.get("running", False)),
+            running=bool(raw.get("running", brief.get("running", False))),
         )
 
 
