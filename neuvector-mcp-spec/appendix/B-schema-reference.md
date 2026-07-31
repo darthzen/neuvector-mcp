@@ -1323,9 +1323,16 @@ Define proxy settings, similar to RESTProxy, but allow users to perform partial 
 | Field | Type | Req | Description |
 |---|---|---|---|
 | `services` | array<string> |  |  |
-| `policy_mode` | string |  |  |
+| `policy_mode` | string |  | Network policy enforcement. |
+| `profile_mode` | string |  | Process and file profile enforcement. |
 | `baseline_profile` | string |  |  |
 | `not_scored` | boolean |  |  |
+
+> `profile_mode` was missing from this table until 2026-07-31. It is present on
+> upstream `RESTServiceBatchConfig` in `apis.go` and was confirmed against a live
+> 5.6.0 controller: sending it to `PATCH /v1/service/config` moves the profile
+> dimension and leaves `policy_mode` alone. Its absence here is what led
+> `nv_set_service_mode` to select the dimension by route, which does not work.
 
 ### `RESTServiceBatchConfigData`
 

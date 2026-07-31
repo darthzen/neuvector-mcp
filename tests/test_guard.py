@@ -8,7 +8,7 @@ import pytest
 import respx
 from fastmcp import Client
 
-from conftest import make_settings
+from conftest import FakeServices, make_settings
 from neuvector_mcp.config import DEFAULT_TOOLSETS
 from neuvector_mcp.guard import confirm_token
 from neuvector_mcp.server import build_server
@@ -31,17 +31,85 @@ async def test_first_call_returns_plan_and_sends_nothing(client, nv_mock: respx.
 
 
 async def test_confirmed_call_applies(client, nv_mock: respx.MockRouter) -> None:
-    route = nv_mock.patch(PATCH_SERVICE_CONFIG).respond(200, json={})
+    fake = FakeServices({"api.prod": {"policy_mode": "Monitor"}}).install(nv_mock)
     args = {"group_name": "nv.api.prod", "mode": "Protect"}
     plan = await client.call_tool("nv_set_group_policy_mode", args)
     token = plan.structured_content["confirm_token"]
 
     result = await client.call_tool("nv_set_group_policy_mode", {**args, "confirm": token})
     assert result.structured_content["status"] == "applied"
-    assert route.call_count == 1
-    assert json.loads(route.calls.last.request.read()) == {
+    assert fake.writes.call_count == 1
+    assert json.loads(fake.writes.calls.last.request.read()) == {
         "config": {"services": ["api.prod"], "policy_mode": "Protect"}
     }
+    assert fake.mode("api.prod") == "Protect"
+
+
+async def test_confirmed_call_steps_through_monitor(client, nv_mock: respx.MockRouter) -> None:
+    """Discover -> Protect on this endpoint is accepted with 200 and dropped."""
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}).install(nv_mock)
+    args = {"group_name": "nv.api.prod", "mode": "Protect"}
+    plan = await client.call_tool("nv_set_group_policy_mode", args)
+
+    result = await client.call_tool(
+        "nv_set_group_policy_mode",
+        {**args, "confirm": plan.structured_content["confirm_token"]},
+    )
+
+    assert [config["policy_mode"] for config in fake.patches] == ["Monitor", "Protect"]
+    assert fake.mode("api.prod") == "Protect"
+    assert "Discover -> Monitor -> Protect" in result.structured_content["effect"]
+
+
+async def test_confirmed_call_refuses_to_claim_a_dropped_change(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}, apply_writes=False).install(
+        nv_mock
+    )
+    args = {"group_name": "nv.api.prod", "mode": "Monitor"}
+    plan = await client.call_tool("nv_set_group_policy_mode", args)
+
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool(
+            "nv_set_group_policy_mode",
+            {**args, "confirm": plan.structured_content["confirm_token"]},
+        )
+
+    assert "did not apply" in str(excinfo.value)
+    assert fake.writes.call_count == 1
+
+
+async def test_confirmed_call_on_an_unknown_service_writes_nothing(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}).install(nv_mock)
+    args = {"group_name": "nv.typo.prod", "mode": "Monitor"}
+    plan = await client.call_tool("nv_set_group_policy_mode", args)
+
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool(
+            "nv_set_group_policy_mode",
+            {**args, "confirm": plan.structured_content["confirm_token"]},
+        )
+
+    assert "no service named" in str(excinfo.value)
+    assert fake.writes.call_count == 0
+
+
+async def test_confirmed_call_at_target_sends_no_write(client, nv_mock: respx.MockRouter) -> None:
+    fake = FakeServices({"api.prod": {"policy_mode": "Protect"}}).install(nv_mock)
+    args = {"group_name": "nv.api.prod", "mode": "Protect"}
+    plan = await client.call_tool("nv_set_group_policy_mode", args)
+
+    result = await client.call_tool(
+        "nv_set_group_policy_mode",
+        {**args, "confirm": plan.structured_content["confirm_token"]},
+    )
+
+    assert result.structured_content["status"] == "applied"
+    assert "no change" in result.structured_content["effect"]
+    assert fake.writes.call_count == 0
 
 
 async def test_custom_group_is_rejected_without_controller_call(

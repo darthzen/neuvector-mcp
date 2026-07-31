@@ -22,7 +22,7 @@ from pydantic import Field
 from ..client import build_query
 from ..config import Settings
 from ..context import app_context
-from ..errors import ValidationError_
+from ..errors import NotFoundError, UpstreamError, ValidationError_
 from ..guard import authorise_write
 from ..models import (
     FileMonitorFilterInput,
@@ -33,6 +33,7 @@ from ..models import (
     WafSensorBindingInput,
     WriteOutcome,
 )
+from ..modes import describe_drift, plan_mode_patches, read_service_modes
 
 MUTATING = ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
@@ -176,8 +177,13 @@ def register(mcp: FastMCP, settings: Settings) -> None:
 
         Policy mode lives on the service, not the group object: RESTGroupConfig
         has no policy_mode field and the controller answers 200 while dropping
-        it. Only learned groups ('nv.<service>.<namespace>') carry a mode.
+        it. Only learned groups ('nv.<service>.<namespace>') carry a mode. The
+        controller also refuses a two-rung move, so this tool reads the current
+        mode, steps through Monitor when it has to, and reads the result back
+        instead of trusting the success status. This sets network policy only;
+        use nv_set_service_mode for process and file profile enforcement.
 
+        Calls GET /v1/service to read the current mode and to verify the result.
         Calls PATCH /v1/service/config with {"config": {"services": [...],
         "policy_mode":...}}.
         """
@@ -189,7 +195,8 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 "custom groups have no mode to set."
             )
         service = group_name[len("nv.") :]
-        payload: dict[str, Any] = {"config": {"services": [service], "policy_mode": mode}}
+        config: dict[str, Any] = {"services": [service], "policy_mode": mode}
+        payload: dict[str, Any] = {"config": config}
         namespace = group_name.split(".")[-1] if group_name.startswith("nv.") else None
 
         plan = authorise_write(
@@ -213,12 +220,49 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         if plan is not None:
             return plan
 
-        response = await app.client.request("PATCH", "/v1/service/config", json=payload)
+        before = await read_service_modes(app.client, [service])
+        if service not in before:
+            raise NotFoundError(
+                f"no service named {service!r} behind group {group_name!r}. Learned groups "
+                "are named 'nv.<service>.<namespace>'; check nv_list_services. Nothing was sent."
+            )
+
+        bodies = plan_mode_patches([service], config, before)
+        if not bodies:
+            return WriteOutcome(
+                status="applied",
+                operation="nv_set_group_policy_mode",
+                target=group_name,
+                effect=(
+                    f"no change: service {service!r} ({group_name}) is already in {mode}. "
+                    "Nothing was sent to the controller."
+                ),
+                payload=payload,
+            )
+
+        response: Any = None
+        for body in bodies:
+            response = await app.client.request("PATCH", "/v1/service/config", json=body)
+
+        # The controller answers 200 to a move it silently drops, so the mode is
+        # read back before this reports success.
+        drift = describe_drift([service], config, await read_service_modes(app.client, [service]))
+        if drift:
+            raise UpstreamError(
+                f"nv_set_group_policy_mode sent {len(bodies)} request(s), all accepted, but "
+                f"the controller did not apply the change: {'; '.join(drift)}. Re-read the "
+                "service with nv_list_services before acting."
+            )
+
+        walked = " -> ".join(
+            [str(before[service].get("policy_mode") or "unknown")]
+            + [str(body["config"]["policy_mode"]) for body in bodies]
+        )
         return WriteOutcome(
             status="applied",
             operation="nv_set_group_policy_mode",
             target=group_name,
-            effect=f"policy_mode of service {service!r} ({group_name}) set to {mode}",
+            effect=f"policy_mode of service {service!r} ({group_name}) verified: {walked}",
             payload=payload,
             controller_response=response if isinstance(response, dict) else {},
         )

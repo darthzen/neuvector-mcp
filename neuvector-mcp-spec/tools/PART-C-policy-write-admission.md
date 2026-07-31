@@ -915,6 +915,23 @@ but **not** its preview/apply pair. Add both in `tests/test_policy_write.py`:
 > `reference/src/neuvector_mcp/tools/policy_write.py`, copied verbatim in Phase
 > 0. Rule N3: **match the existing code exactly.** Transcription follows.
 
+> **SUPERSEDED TWICE — the transcription below is history, not the current tool.**
+> 1. The endpoint is `PATCH /v1/service/config`, not `PATCH /v1/group/{name}`.
+>    `RESTGroupConfig` genuinely has no `policy_mode`; the controller answered 200
+>    and dropped it. Policy mode is a property of the *service*, so the tool now
+>    strips the `nv.` prefix and sends `{"config": {"services": [<service>],
+>    "policy_mode": ...}}`. See the note on Appendix B below, which called this
+>    out as blocked and was resolved by measurement, not by guessing a key.
+> 2. The controller accepts a mode move of only one rung along
+>    `Discover -> Monitor -> Protect` and silently discards a two-rung jump. The
+>    tool now reads the current mode with `GET /v1/service`, steps through
+>    `Monitor` when it has to, and reads the service back before reporting
+>    `applied`. The shared ladder helpers live in `neuvector_mcp/modes.py` and are
+>    documented under `nv_set_service_mode` in PART-D.
+>
+> `test_guard.py` has grown accordingly and the "add nothing, edit nothing" note
+> further down no longer holds.
+
 **Arguments**
 
 | Name | Type | Default | Description (verbatim into `Field(description=...)`) |
