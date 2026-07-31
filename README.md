@@ -4,13 +4,13 @@
 
 A Model Context Protocol server over the SUSE NeuVector container security
 control plane. It exposes NeuVector's inventory, vulnerability, compliance,
-event and policy surface as 125 typed MCP tools, so an operator or an agent can
+event and policy surface as 119 typed MCP tools, so an operator or an agent can
 ask questions like *"which prod workloads run images with critical CVEs and are
 still in Discover mode"* and, behind an explicit two-step confirmation, act on
 the answer. It ships as one SUSE BCI image that runs either over `stdio` for
 a desktop MCP client or over authenticated HTTP in-cluster.
 
-**Read-only by default.** Of the 125 tools, only the 53 read tools are registered
+**Read-only by default.** Of the 119 tools, only the 52 read tools are registered
 unless you deliberately turn a mutating toolset on.
 
 ---
@@ -46,7 +46,7 @@ neuvector-mcp
 ```
 
 `NV_TRANSPORT` defaults to `stdio` and `NV_READ_ONLY` defaults to `true`, so the
-above gives you the 53 read tools and nothing else.
+above gives you the 52 read tools and nothing else.
 
 ### Client configuration block
 
@@ -227,19 +227,19 @@ the gate derives each tool's `readOnlyHint` from its toolset tag.
 | `vulnerability` | read | yes | 10 | image/workload/host scan reports, registries, scanners, vulnerability profiles, sigstore roots and verifiers |
 | `compliance` | read | yes | 4 | workload/host compliance, CIS bench reports, compliance profiles |
 | `events` | read | yes | 5 | threats, violations, incidents, audits, system events, alerts |
-| `policy_read` | read | yes | 19 | network rules, process/file profiles, DLP sensors and groups, WAF sensors, response rules and options, admission state and rules, admission rule assessment, config-import status |
+| `policy_read` | read | yes | 18 | network rules, process/file profiles, DLP sensors and groups, WAF sensors, response rules and options, admission state and rules, admission rule assessment |
 | `iam_read` | read | yes | 4 | users, roles, auth servers, API keys (metadata only) |
 | `policy_write` | write | **no** | 23 | create/update/delete groups, network rules (batch and single), process and file-monitor profiles, WAF and DLP sensors and group bindings, response rules, service creation |
 | `admission` | write | **no** | 5 | admission control state and rules, bulk rule deletion |
 | `scan_ops` | write | **no** | 13 | trigger/stop scans, registry CRUD, repository scan, bench runs, sigstore roots of trust and verifiers |
 | `runtime_ops` | write | **no** | 5 | quarantine, service mode changes, packet capture, per-workload config |
 | `iam_write` | write | **no** | 5 | user, role and API key mutations |
-| `system_write` | write | **no** | 21 | system config, namespace tags and defaults, scan config, vulnerability and compliance profiles, custom compliance checks, webhooks, cluster-wide system requests, config export/import, remote repositories |
-| | | | **125** | |
+| `system_write` | write | **no** | 16 | system config, namespace tags and defaults, scan config, vulnerability and compliance profiles, custom compliance checks, webhooks, cluster-wide system requests |
+| | | | **119** | |
 
-**The default surface is 53 read tools. All 72 mutating tools are OFF by
+**The default surface is 52 read tools. All 67 mutating tools are OFF by
 default.** With `NV_TOOLSETS` and `NV_READ_ONLY` unset, `tools/list` returns
-exactly the 53 read tools; the mutating ones are never registered, so they are
+exactly the 52 read tools; the mutating ones are never registered, so they are
 not merely refused, they are absent.
 
 To enable a mutating toolset you must do two things:
@@ -490,15 +490,15 @@ assembled tool list, and checks:
 Current state:
 
 ```
-verify_spec: 125 tools introspected
-  [ok  ] R1: 125 checked, 0 violation(s)
-  [ok  ] R2: 125 checked, 0 violation(s)
-  [ok  ] R3: 125 checked, 0 violation(s)
-  [ok  ] R4: 125 checked, 0 violation(s)
-  [ok  ] R5: 125 checked, 0 violation(s)
-  [ok  ] R6: 125 checked, 0 violation(s)
-  [ok  ] R7: 125 checked, 0 violation(s)
-  [ok  ] R8: 125 checked, 0 violation(s)
+verify_spec: 119 tools introspected
+  [ok  ] R1: 119 checked, 0 violation(s)
+  [ok  ] R2: 119 checked, 0 violation(s)
+  [ok  ] R3: 119 checked, 0 violation(s)
+  [ok  ] R4: 119 checked, 0 violation(s)
+  [ok  ] R5: 119 checked, 0 violation(s)
+  [ok  ] R6: 119 checked, 0 violation(s)
+  [ok  ] R7: 119 checked, 0 violation(s)
+  [ok  ] R8: 119 checked, 0 violation(s)
   [ok  ] R9: 1 checked, 0 violation(s)
 ```
 

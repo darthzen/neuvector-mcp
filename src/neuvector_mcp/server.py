@@ -22,7 +22,6 @@ from .tools import (
     admission,
     compliance,
     compliance_write,
-    config_transfer,
     dlp,
     events,
     iam_read,
@@ -70,7 +69,6 @@ TOOL_MODULES = (
     response_write,
     sigstore,
     service_ops,
-    config_transfer,
 )
 
 INSTRUCTIONS = """\

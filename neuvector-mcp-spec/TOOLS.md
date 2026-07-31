@@ -1,8 +1,8 @@
 # TOOLS — index
 
 > **Scope of this file.** The `tools/PART-*.md` contracts below specify the
-> original **72**-tool build. The server now registers **125** tools: 8 WAF tools
-> added in PR #38 and 45 security-ops write tools added on
+> original **72**-tool build. The server now registers **119** tools: 8 WAF tools
+> added in PR #38 and 39 security-ops write tools added on
 > `feat/full-write-surface` have **no PART-file contract**. They were specified
 > directly from upstream `controller/api/apis.go` and `apis.yaml` (NeuVector
 > 5.6.0) instead, and their contracts live in their docstrings plus
@@ -44,17 +44,17 @@ Counts are `in PART files` + `added later` = `registered today`.
 | `vulnerability` | read | 7 | 3 | 10 | Part A |
 | `compliance` | read | 4 | 0 | 4 | Part A |
 | `events` | read | 5 | 0 | 5 | Part B |
-| `policy_read` | read | 10 | 9 | 19 | Part B |
+| `policy_read` | read | 10 | 8 | 18 | Part B |
 | `iam_read` | read | 4 | 0 | 4 | Part B |
 | `policy_write` | write | 8 | 15 | 23 | Part C |
 | `admission` | write | 4 | 1 | 5 | Part C |
 | `scan_ops` | write | 7 | 6 | 13 | Part D |
 | `runtime_ops` | write | 4 | 1 | 5 | Part D |
 | `iam_write` | write | 5 | 0 | 5 | Part D |
-| `system_write` | write | 3 | 18 | 21 | Part D |
+| `system_write` | write | 3 | 13 | 16 | Part D |
 
-Originally **41 read / 31 write**. Today **53 read tools** (the default surface)
-and **72 write tools** (all off by default).
+Originally **41 read / 31 write**. Today **52 read tools** (the default surface)
+and **67 write tools** (all off by default).
 
 ## Alphabetical tool index
 
@@ -137,7 +137,7 @@ and **72 write tools** (all off by default).
 
 As originally specified, the 72 tools referenced **84 distinct controller
 endpoints** out of 232 documented, plus 2 allowlisted undocumented routes. The
-125 tools registered today reference **151 distinct endpoints**: 148 documented
+119 tools registered today reference **132 distinct endpoints**: 129 documented
 and 3 allowlisted undocumented (`GET /v1/conversation`,
 `GET /v1/response/options`, `GET /v1/selfuser`). Every reference is
 machine-verified against `spec_endpoints.json` by `scripts/verify_spec.py`
@@ -148,26 +148,19 @@ Endpoints deliberately left uncovered: federation, debug and internal routes,
 IBM Security Advisor, CSP billing, and platform administration (users, roles,
 LDAP/SAML/OIDC auth servers, sniffer, license).
 
-**Reversed decision — file import/export.** This spec originally excluded the
-file endpoints (`/v1/file/*`) on the grounds that they "move whole YAML
-configurations and belong in a CLI rather than a conversational tool surface."
-`feat/full-write-surface` reverses that: `nv_export_config` and
-`nv_import_config` cover them, on the principle that the server implements the
-API and the operator gates it by toolset. Three mitigations came with the
-reversal, because the original objection was not baseless:
-
-- `POST /v1/file/config` (multipart whole-cluster import) is still **not**
-  implemented — it is the most destructive call in the API.
-- `kind="all"` export refuses to return the document body, reporting size and a
-  count of credential key names only. A full-cluster export embeds registry
-  credentials and webhook URLs, and the line-based redactor cannot safely
-  guarantee they are all masked.
-- Narrow-kind exports return redacted YAML with the redactor's blind spots
-  enumerated in the tool description and pinned by tests.
+**Deferred — file import/export.** This spec excludes the file endpoints
+(`/v1/file/*`) on the grounds that they "move whole YAML configurations and
+belong in a CLI rather than a conversational tool surface." An implementation
+that reverses that decision — `nv_export_config`, `nv_import_config`,
+`nv_get_import_status` and the three `remote_repository` tools, with a
+whole-cluster import deliberately left out, a withheld `kind="all"` export body
+and a line-wise YAML redactor — exists on branch `feat/config-transfer`. It was
+held back from `feat/full-write-surface` so the rest of the write surface could
+ship while the exclusion is reconsidered. The exclusion stands until then.
 
 ## Tools without a PART contract
 
-These 53 tools are registered by the server but are **not** specified in the
+These 47 tools are registered by the server but are **not** specified in the
 `tools/PART-*.md` files. Their wire shapes were taken from upstream
 `controller/api/apis.go` and `apis.yaml` at NeuVector **5.6.0**; where those two
 disagreed `apis.go` won, because it is the struct that actually decodes the
@@ -286,16 +279,3 @@ Tests: `tests/test_service_ops.py`
 | `nv_create_service` | `policy_write` |
 | `nv_set_namespace_defaults` | `system_write` |
 | `nv_update_workload_config` | `runtime_ops` |
-
-### `tools/config_transfer.py` — Config export / import and remote repositories
-
-Tests: `tests/test_config_transfer.py`
-
-| Tool | Toolset |
-|---|---|
-| `nv_create_remote_repository` | `system_write` |
-| `nv_delete_remote_repository` | `system_write` |
-| `nv_export_config` | `system_write` |
-| `nv_get_import_status` | `policy_read` |
-| `nv_import_config` | `system_write` |
-| `nv_update_remote_repository` | `system_write` |

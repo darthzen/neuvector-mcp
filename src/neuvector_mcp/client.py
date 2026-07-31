@@ -194,99 +194,6 @@ class NeuVectorClient:
         return {}
 
     # -- request path -----------------------------------------------------------
-    async def _send(
-        self,
-        method: Method,
-        path: str,
-        *,
-        params: Mapping[str, str] | None = None,
-        json: Any | None = None,
-        content: str | bytes | None = None,
-        extra_headers: Mapping[str, str] | None = None,
-        timeout_s: float | None = None,
-        authenticated: bool = True,
-        _relogin_done: bool = False,
-    ) -> httpx.Response:
-        """Perform one controller call and return the raw :class:`httpx.Response`.
-
-        This is the single request path for the whole client: auth headers,
-        retry/backoff, and the one-shot re-login on 401 all live here and
-        nowhere else. :meth:`request`, :meth:`request_text` and
-        :meth:`send_document` differ ONLY in how they encode the request body and
-        decode the body of a 2xx response; every non-2xx response is classified
-        here identically for all of them.
-
-        Args:
-            method: HTTP verb.
-            path: Absolute controller path beginning with ``/v1/`` or ``/v2/``.
-            params: Query parameters, normally produced by :func:`build_query`.
-            json: JSON request body. Mutually exclusive with ``content``.
-            content: Pre-encoded request body, for the endpoints that take a raw
-                document rather than a JSON object. Mutually exclusive with ``json``.
-            extra_headers: Per-call headers merged over the auth headers, e.g. a
-                ``Content-Type`` override for a non-JSON body.
-            timeout_s: Per-call override.
-            authenticated: Set ``False`` only for ``POST /v1/auth``.
-            _relogin_done: Internal recursion guard.
-
-        Returns:
-            The 2xx :class:`httpx.Response`, body undecoded.
-
-        Raises:
-            NeuVectorMCPError: for every non-2xx response, already classified.
-        """
-        headers = dict(self._auth_headers()) if authenticated else {}
-        headers.update(extra_headers or {})
-        attempt = 0
-        last_exc: NeuVectorMCPError | None = None
-
-        while attempt < _MAX_ATTEMPTS:
-            attempt += 1
-            try:
-                response = await self._http.request(
-                    method,
-                    path,
-                    params=dict(params or {}),
-                    json=json,
-                    content=content,
-                    headers=headers,
-                    timeout=timeout_s or self._s.request_timeout_s,
-                )
-            except httpx.TimeoutException as exc:
-                last_exc = UpstreamError(f"controller timeout on {method} {path}: {exc}")
-            except httpx.HTTPError as exc:
-                last_exc = UpstreamError(f"controller unreachable on {method} {path}: {exc}")
-            else:
-                if 200 <= response.status_code < 300:
-                    return response
-                body = _safe_json(response)
-                if (
-                    response.status_code == 401
-                    and self._s.auth_mode == "password"
-                    and not _relogin_done
-                ):
-                    async with self._login_lock:
-                        await self.login()
-                    return await self._send(
-                        method,
-                        path,
-                        params=params,
-                        json=json,
-                        content=content,
-                        extra_headers=extra_headers,
-                        timeout_s=timeout_s,
-                        authenticated=authenticated,
-                        _relogin_done=True,
-                    )
-                if not is_retryable(response.status_code, body):
-                    raise classify(response.status_code, body)
-                last_exc = classify(response.status_code, body)
-
-            if attempt < _MAX_ATTEMPTS:
-                await asyncio.sleep(_BACKOFF_BASE_S * (2 ** (attempt - 1)))
-
-        raise last_exc or UpstreamError(f"{method} {path} failed after {_MAX_ATTEMPTS} attempts")
-
     async def request(
         self,
         method: Method,
@@ -317,100 +224,53 @@ class NeuVectorClient:
         Raises:
             NeuVectorMCPError: for every non-2xx response, already classified.
         """
-        response = await self._send(
-            method,
-            path,
-            params=params,
-            json=json,
-            timeout_s=timeout_s,
-            authenticated=authenticated,
-            _relogin_done=_relogin_done,
-        )
-        return _safe_json(response) or {}
+        headers = self._auth_headers() if authenticated else {}
+        attempt = 0
+        last_exc: NeuVectorMCPError | None = None
 
-    async def request_text(
-        self,
-        method: Method,
-        path: str,
-        *,
-        params: Mapping[str, str] | None = None,
-        json: Any | None = None,
-        timeout_s: float | None = None,
-    ) -> str:
-        """Perform one controller call and return the WHOLE 2xx body as text.
+        while attempt < _MAX_ATTEMPTS:
+            attempt += 1
+            try:
+                response = await self._http.request(
+                    method,
+                    path,
+                    params=dict(params or {}),
+                    json=json,
+                    headers=headers,
+                    timeout=timeout_s or self._s.request_timeout_s,
+                )
+            except httpx.TimeoutException as exc:
+                last_exc = UpstreamError(f"controller timeout on {method} {path}: {exc}")
+            except httpx.HTTPError as exc:
+                last_exc = UpstreamError(f"controller unreachable on {method} {path}: {exc}")
+            else:
+                if 200 <= response.status_code < 300:
+                    return _safe_json(response) or {}
+                body = _safe_json(response)
+                if (
+                    response.status_code == 401
+                    and self._s.auth_mode == "password"
+                    and not _relogin_done
+                ):
+                    async with self._login_lock:
+                        await self.login()
+                    return await self.request(
+                        method,
+                        path,
+                        params=params,
+                        json=json,
+                        timeout_s=timeout_s,
+                        authenticated=authenticated,
+                        _relogin_done=True,
+                    )
+                if not is_retryable(response.status_code, body):
+                    raise classify(response.status_code, body)
+                last_exc = classify(response.status_code, body)
 
-        Use this, and only this, for the endpoints that answer with a document
-        rather than a JSON object: every ``/v1/file/*`` export answers with YAML.
+            if attempt < _MAX_ATTEMPTS:
+                await asyncio.sleep(_BACKOFF_BASE_S * (2 ** (attempt - 1)))
 
-        Routing a YAML answer through :meth:`request` would hand it to
-        :func:`_safe_json`, which cannot parse it and falls back to
-        ``response.text[:500]`` - so the caller would receive a 500-character
-        fragment of a document while the call still looked like a success. This
-        method never truncates: capping a document is the caller's decision and
-        the caller must report it, not discover it.
-
-        Auth, retry, backoff and the one-shot re-login are :meth:`_send`'s, i.e.
-        identical to :meth:`request`.
-
-        Args:
-            method: HTTP verb.
-            path: Absolute controller path beginning with ``/v1/`` or ``/v2/``.
-            params: Query parameters, normally produced by :func:`build_query`.
-            json: JSON request body; the exports select what to export with one.
-            timeout_s: Per-call override.
-
-        Returns:
-            The decoded response body, in full. ``""`` for an empty body.
-
-        Raises:
-            NeuVectorMCPError: for every non-2xx response, already classified.
-        """
-        response = await self._send(method, path, params=params, json=json, timeout_s=timeout_s)
-        return response.text
-
-    async def send_document(
-        self,
-        method: Method,
-        path: str,
-        *,
-        document: str,
-        content_type: str = "text/plain; charset=utf-8",
-        params: Mapping[str, str] | None = None,
-        timeout_s: float | None = None,
-    ) -> Any:
-        """POST a raw text document as the request body and return the parsed JSON reply.
-
-        The counterpart of :meth:`request_text`. The ``/v1/file/*/config`` import
-        endpoints take the contents of a YAML file as the entire request body -
-        not a JSON object wrapping it - and answer with JSON
-        (``RESTImportTaskData``). ``json=`` cannot express that, because httpx
-        would JSON-encode the document into a quoted string.
-
-        Args:
-            method: HTTP verb.
-            path: Absolute controller path beginning with ``/v1/`` or ``/v2/``.
-            document: The body, sent verbatim as UTF-8.
-            content_type: ``Content-Type`` for the body. The default is one of the
-                two values ``apis.yaml`` lists under ``consumes`` for these routes.
-            params: Query parameters, normally produced by :func:`build_query`.
-            timeout_s: Per-call override; imports are slow, so pass
-                ``settings.long_request_timeout_s``.
-
-        Returns:
-            Parsed JSON, or ``{}`` when the controller returns an empty body.
-
-        Raises:
-            NeuVectorMCPError: for every non-2xx response, already classified.
-        """
-        response = await self._send(
-            method,
-            path,
-            params=params,
-            content=document.encode("utf-8"),
-            extra_headers={"Content-Type": content_type},
-            timeout_s=timeout_s,
-        )
-        return _safe_json(response) or {}
+        raise last_exc or UpstreamError(f"{method} {path} failed after {_MAX_ATTEMPTS} attempts")
 
     # -- convenience ------------------------------------------------------------
     async def get_list(
