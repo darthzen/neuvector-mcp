@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYVC9S31MEYHD1J0T9HNXT4K",
+  "strategy": "manual-commit",
+  "branch": "fix/service-policy-mode",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "src/neuvector_mcp/tools/policy_write.py",
+    "tests/test_guard.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2169,
+    "cache_creation_tokens": 136252,
+    "cache_read_tokens": 8197164,
+    "output_tokens": 53463,
+    "api_call_count": 77
+  }
+}

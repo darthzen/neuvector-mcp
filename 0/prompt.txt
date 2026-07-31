@@ -1,0 +1,13 @@
+Read the handoff and start the next task
+
+---
+
+Try again. I think I got it.
+
+---
+
+Got http 200 when I ran the command
+
+---
+
+It's protected, but unusable. All of my mcp servers on that cluster are now unavailable.
