@@ -3,7 +3,7 @@
   "checkpoint_id": "01KYV6QEMMK9JGT2AVFEGTX66B",
   "strategy": "manual-commit",
   "branch": "build/phases-1-11",
-  "checkpoints_count": 10,
+  "checkpoints_count": 12,
   "files_touched": [
     "Makefile",
     "SPEC.md",
@@ -17,7 +17,8 @@
     "tests/fixtures/waf_rules.json",
     "tests/fixtures/waf_sensor_detail.json",
     "tests/test_policy_read.py",
-    "tests/test_policy_write.py"
+    "tests/test_policy_write.py",
+    "uv.lock"
   ],
   "sessions": [
     {
@@ -33,13 +34,20 @@
       "compact_transcript": "/1/transcript.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 647,
-    "cache_creation_tokens": 360967,
-    "cache_read_tokens": 27964647,
-    "output_tokens": 153379,
-    "api_call_count": 192
+    "input_tokens": 770,
+    "cache_creation_tokens": 476137,
+    "cache_read_tokens": 34108297,
+    "output_tokens": 207337,
+    "api_call_count": 258
   }
 }
