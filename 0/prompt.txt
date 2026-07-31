@@ -1,0 +1,564 @@
+read your handoff doc and start into the tasks. Use sub-agents to parallelize the work.
+
+---
+
+<task-notification>
+<task-id>a59dbf8318c44f510</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/dc58c014-b201-4eab-9606-2a6be47bd6b7/tasks/a59dbf8318c44f510.output</output-file>
+<status>completed</status>
+<summary>Agent "Inventory write-endpoint gap" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## 1. Existing toolset tags (exhaustive)
+
+Defined in `/Users/rashford/Library/Mobile Documents/com~apple~CloudDocs/Developer/neuvector-mcp/src/neuvector_mcp/config.py:22-64` — **12 tags**, and every tool carries exactly one of them plus a `read`/`write` marker tag:
+
+| Toolset | Kind | config.py evidence |
+|---|---|---|
+| `inventory` | read | `config.py:24` |
+| `vulnerability` | read | `config.py:25` |
+| `compliance` | read | `config.py:26` |
+| `events` | read | `config.py:27` |
+| `policy_read` | read | `config.py:28` |
+| `iam_read` | read | `config.py:29` |
+| `policy_write` | mutating | `config.py:31`, `config.py:53` |
+| `admission` | mutating | `config.py:32`, `config.py:54` |
+| `scan_ops` | mutating | `config.py:33`, `config.py:55` |
+| `runtime_ops` | mutating | `config.py:34`, `config.py:56` |
+| `iam_write` | mutating | `config.py:35`, `config.py:57` |
+| `system_write` | mutating | `config.py:36`, `config.py:58` |
+
+`DEFAULT_TOOLSETS` (`config.py:40-47`) = the six read toolsets. `READ_TOOLSETS` is derived as the complement (`config.py:64`), so **a toolset may never mix read and write tools** — `scripts/verify_spec.py:159-171` (R4) enforces exactly one toolset tag per tool and requires a `confirm` param iff the tag is mutating.
+
+### Where a new toolset must be registered
+
+1. `src/neuvector_mcp/config.py:22` — add to `ALL_TOOLSETS`.
+2. `src/neuvector_mcp/config.py:50` — add to `MUTATING_TOOLSETS` (write toolsets only; read toolsets are auto-derived at `config.py:64`).
+3. `src/neuvector_mcp/config.py:40` — `DEFAULT_TOOLSETS` **only** if read-only.
+4. `src/neuvector_mcp/server.py:21-34` (import block) and `src/neuvector_mcp/server.py:45-57` (`TOOL_MODULES`) — only if you add a new module file; existing modules self-gate via `settings.toolset_enabled(...)` (e.g. `policy_write.py:146`, `system.py:141`).
+5. Each new module's `register()` needs its own `if not settings.toolset_enabled("&lt;tag&gt;"): return` guard (pattern at `src/neuvector_mcp/tools/scan_ops.py:63`).
+6. Docs/config that enumerate toolsets: `README.md:204,241,249`, `SPEC.md:262,566`, `deploy/deployment.yaml:50`, `neuvector-mcp-spec/TOOLS.md:50-121`.
+7. `tests/conftest.py:36` and `tests/test_config.py:177,210-213` iterate `ALL_TOOLSETS` and will pick a new tag up automatically — but `test_config.py` asserts `MUTATING_TOOLSETS | READ_TOOLSETS == set(ALL_TOOLSETS)`, so step 2 is mandatory.
+
+---
+
+## 2. Already-implemented write endpoints (evidence)
+
+Cross-checked against all 119 documented `POST|PATCH|PUT|DELETE` entries in `spec_endpoints.json` (identical to `neuvector-mcp-spec/reference/spec_endpoints.json` — verified by `diff`).
+
+| Method + path | Tool | Evidence (file:line) |
+|---|---|---|
+| PATCH `/v1/admission/state` | `nv_set_admission_state` | `src/neuvector_mcp/tools/admission.py:78` → call at `admission.py:200` |
+| POST `/v1/admission/rule` | `nv_create_admission_rule` | `admission.py:220` → `admission.py:364` |
+| PATCH `/v1/admission/rule` | `nv_update_admission_rule` | `admission.py:390` → `admission.py:537` |
+| DELETE `/v1/admission/rule/{id}` | `nv_delete_admission_rule` | `admission.py:555` → `admission.py:612` |
+| POST `/v1/assess/admission/rule` | `nv_assess_admission_rule` (read) | `policy_read.py:774` → `policy_read.py:848` |
+| POST `/v1/group` | `nv_create_group` | `policy_write.py:273` → `policy_write.py:343` |
+| PATCH `/v1/group/{name}` | `nv_update_group_criteria` | `policy_write.py:360` → `policy_write.py:432` |
+| DELETE `/v1/group/{name}` | `nv_delete_group` | `policy_write.py:231` → `policy_write.py:259` |
+| PATCH `/v1/policy/rule` | `nv_apply_network_rule_changes` | `policy_write.py:450` → `policy_write.py:660-666` |
+| DELETE `/v1/policy/rule/{id}` | `nv_delete_network_rule` | `policy_write.py:684` → `policy_write.py:738` |
+| PATCH `/v1/process_profile/{name}` | `nv_update_process_profile` | `policy_write.py:753` → `policy_write.py:889-891` |
+| PATCH `/v1/file_monitor/{name}` | `nv_update_file_monitor_profile` | `policy_write.py:909` → `policy_write.py:1027` |
+| POST `/v1/waf/sensor` | `nv_create_waf_sensor` | `policy_write.py:1046` → `policy_write.py:1127` |
+| PATCH `/v1/waf/sensor/{name}` | `nv_update_waf_sensor` | `policy_write.py:1145` → `policy_write.py:1212` |
+| DELETE `/v1/waf/sensor/{name}` | `nv_delete_waf_sensor` | `policy_write.py:1227` → `policy_write.py:1262` |
+| PATCH `/v1/waf/group/{name}` | `nv_set_waf_group` | `policy_write.py:1276` → `policy_write.py:1358` |
+| PATCH `/v1/service/config` | `nv_set_group_policy_mode` + `nv_set_service_mode` | `policy_write.py:216`; `runtime_ops.py:57` + `runtime_ops.py:241,282` |
+| PATCH `/v1/service/config/network` | `nv_set_service_mode(scope='network')` | `runtime_ops.py:58` + `runtime_ops.py:241,282` |
+| PATCH `/v1/service/config/profile` | `nv_set_service_mode(scope='profile')` | `runtime_ops.py:59` + `runtime_ops.py:241,282` |
+| POST `/v1/workload/request/{id}` | `nv_quarantine_workload` | `runtime_ops.py:73` → `runtime_ops.py:144-146` |
+| POST `/v1/scan/workload/{id}`, POST `/v1/scan/host/{id}` | `nv_trigger_scan` | `scan_ops.py:71` → `scan_ops.py:130` |
+| POST `/v1/scan/registry/{name}/scan` | `nv_trigger_scan(target='registry')` | `scan_ops.py:123` |
+| DELETE `/v1/scan/registry/{name}/scan` | `nv_stop_registry_scan` | `scan_ops.py:162` → `scan_ops.py:208-210` |
+| POST `/v1/scan/repository` | `nv_scan_repository` | `scan_ops.py:225` → `scan_ops.py:377-379` |
+| POST `/v2/scan/registry` | `nv_create_registry` | `scan_ops.py:405` → `scan_ops.py:572-574` |
+| PATCH `/v2/scan/registry/{name}` | `nv_update_registry` | `scan_ops.py:589` → `scan_ops.py:727-729` |
+| DELETE `/v1/scan/registry/{name}` | `nv_delete_registry` | `scan_ops.py:744` → `scan_ops.py:790` |
+| POST `/v1/bench/host/{id}/{docker,kubernetes}` | `nv_trigger_bench_run` | `scan_ops.py:805` → `scan_ops.py:858-863` |
+| PATCH `/v2/system/config` | `nv_update_system_config` | `system.py:150` → `system.py:467-469` |
+| PATCH `/v1/domain/{name}` | `nv_set_namespace_tags` | `system.py:485` → `system.py:550` |
+| PATCH `/v1/scan/config` | `nv_update_scan_config` | `system.py:566` → `system.py:647` |
+
+Platform-admin writes already implemented (out of scope, listed for completeness): `iam_write.py:197,311,375,494,568`; sniffer `runtime_ops.py:393,456`.
+
+**Two notes that correct assumptions in the task brief:**
+- **"Service mode split endpoints" are already done.** `/v1/service/config`, `/v1/service/config/network` and `/v1/service/config/profile` are all reachable via `nv_set_service_mode`'s `scope` parameter — `src/neuvector_mcp/tools/runtime_ops.py:56-60` maps all three.
+- **"File monitor writes" are already done.** `PATCH /v1/file_monitor/{name}` is the only documented file-monitor write and it is implemented at `src/neuvector_mcp/tools/policy_write.py:1027`.
+
+**Appendix B caveat:** `neuvector-mcp-spec/appendix/B-schema-reference.md:6` says it contains **191 of 396** definitions — it was transitively closed over only the types the *current* server touches. I verified by grep that it has **no** entry for `RESTDlpSensorConfigData`, `RESTDlpGroupConfigData`, `RESTWafSensorConfigData`, `RESTComplianceProfileConfigData`, `RESTComplianceProfileEntryConfigData`, `RESTVulnerabilityProfileEntryConfigData`, `RESTPolicyRuleConfigData`, `RESTResponseRuleConfigData`, `RESTCustomCheckConfigData`, `RESTDomainConfigData`, `RESTSystemWebhookConfigData`, `REST_Sigstore*`, or any `*Export` type. Those rows below are marked **absent from B** — the implementer must pull the definition from upstream `controller/api/apis.yaml`.
+
+---
+
+## 3. Gap inventory — missing security-ops write endpoints
+
+| method | path | what it does | Appendix B request schema name | suggested tool name | suggested toolset tag | risk |
+|---|---|---|---|---|---|---|
+| POST | `/v1/dlp/sensor` | Create a DLP sensor (named set of regex patterns matched against payloads) | `RESTDlpSensorConfigData` — **absent from B** | `nv_create_dlp_sensor` | `policy_write` | med |
+| PATCH | `/v1/dlp/sensor/{name}` | Replace/patch a DLP sensor's rule list | `RESTDlpSensorConfigData` — **absent from B** | `nv_update_dlp_sensor` | `policy_write` | med |
+| DELETE | `/v1/dlp/sensor/{name}` | Delete a DLP sensor; any group referencing it loses inspection | — | `nv_delete_dlp_sensor` | `policy_write` | med |
+| PATCH | `/v1/dlp/group/{name}` | Bind/unbind DLP sensors to a group and set per-sensor action (allow/deny) | `RESTDlpGroupConfigData` — **absent from B** | `nv_set_dlp_group` | `policy_write` | **high** (deny action drops live traffic) |
+| PATCH | `/v1/response/rule` | Batch insert/move/delete of response rules (ordered list) | `RESTResponseRuleActionData` — B:1082 (`insert` only) | `nv_apply_response_rule_changes` | `policy_write` | **high** (rules can quarantine workloads / suppress alerts) |
+| PATCH | `/v1/response/rule/{id}` | Update one response rule in place | `RESTResponseRuleConfigData` — **absent from B** | `nv_update_response_rule` | `policy_write` | med |
+| DELETE | `/v1/response/rule/{id}` | Delete one response rule | — | `nv_delete_response_rule` | `policy_write` | med |
+| DELETE | `/v1/response/rule` | Delete **all** response rules in a scope (`?scope=`) | — | `nv_delete_all_response_rules` | `policy_write` | **high** (silently disables all automated response) |
+| POST | `/v1/system/config/webhook` | Create a webhook alert destination (Slack/JSON/Teams) | `RESTSystemWebhookConfigData` — **absent from B**; payload shape = `RESTWebhook` B:1853 | `nv_create_webhook` | `system_write` | med (URL is an egress + secret sink) |
+| PATCH | `/v1/system/config/webhook/{name}` | Update a webhook destination (`?scope=`) | `RESTSystemWebhookConfigData` — **absent from B** | `nv_update_webhook` | `system_write` | med |
+| DELETE | `/v1/system/config/webhook/{name}` | Delete a webhook destination (`?scope=`) | — | `nv_delete_webhook` | `system_write` | med (breaks response rules that target it) |
+| PATCH | `/v1/vulnerability/profile/{name}` | Replace a whole vulnerability profile's entry list | `RESTVulnerabilityProfileConfigData` — **B:1824** | `nv_update_vulnerability_profile` | `system_write` | **high** (bulk-suppresses CVEs cluster-wide) |
+| POST | `/v1/vulnerability/profile/{name}/entry` | Add one CVE-suppression entry (name/days/domains/images) | `RESTVulnerabilityProfileEntryConfigData` — **absent from B**; entry shape = `RESTVulnerabilityProfileEntry` B:1836 | `nv_add_vulnerability_profile_entry` | `system_write` | med |
+| PATCH | `/v1/vulnerability/profile/{name}/entry/{id}` | Update one suppression entry | `RESTVulnerabilityProfileEntryConfigData` — **absent from B** | `nv_update_vulnerability_profile_entry` | `system_write` | med |
+| DELETE | `/v1/vulnerability/profile/{name}/entry/{id}` | Remove one suppression entry (un-suppresses CVEs) | — | `nv_delete_vulnerability_profile_entry` | `system_write` | low |
+| PATCH | `/v1/compliance/profile/{name}` | Set `disable_system` and replace the profile's check-tag entries | `RESTComplianceProfileConfigData` — **absent from B**; body shape = `RESTComplianceProfile` B:488 | `nv_update_compliance_profile` | `system_write` | med |
+| PATCH | `/v1/compliance/profile/{name}/entry/{check}` | Re-tag one compliance check (PCI/GDPR/HIPAA/NIST…) | `RESTComplianceProfileEntryConfigData` — **absent from B**; entry = `RESTComplianceProfileEntry` B:497 | `nv_set_compliance_check_tags` | `system_write` | low |
+| DELETE | `/v1/compliance/profile/{name}/entry/{check}` | Drop a check's tag overrides | — | `nv_delete_compliance_check_tags` | `system_write` | low |
+| PATCH | `/v1/custom_check/{group}` | Install/replace custom compliance **shell scripts** for a group | `RESTCustomCheckConfigData` — **absent from B**; body = `RESTCustomCheckData` B:525 / `RESTCustomChecks` B:531 (`scripts[].script`) | `nv_set_custom_compliance_checks` | `system_write` | **high** (arbitrary script executed by the enforcer on the node) |
+| PATCH | `/v1/policy/rule/{id}` | Update a single network policy rule without a batch | `RESTPolicyRuleConfigData` — **absent from B**; rule shape = `RESTPolicyRule` B:797 | `nv_update_network_rule` | `policy_write` | **high** (changes what is allowed/denied on the wire) |
+| DELETE | `/v1/policy/rule` | Delete **all** network policy rules in a scope (`?scope=`) | — | `nv_delete_all_network_rules` | `policy_write` | **high** (Protect-mode groups drop everything afterwards) |
+| DELETE | `/v1/admission/rules` | Delete **all** admission control rules in a scope (`?scope=`) | — | `nv_delete_all_admission_rules` | `admission` | **high** (disables all deployment gating) |
+| POST | `/v1/service` | Create a service (group) entry with initial policy_mode/baseline | `RESTServiceConfigData` — **B:1347** | `nv_create_service` | `policy_write` | med |
+| PATCH | `/v1/workload/{id}` | Per-container config (wire mode / quarantine flag) | `RESTWorkloadConfigData` — **absent from B** | `nv_update_workload_config` | `runtime_ops` | **high** (can change datapath mode of a live container) |
+| POST | `/v1/system/request` | Cluster-wide request: set `policy_mode` / `baseline_profile` for everything, or bulk `unquarantine` | `RESTSystemRequestData` — **B:1636** (`RESTSystemRequest` B:1628, `RESTUnquarReq` B:1709) | `nv_apply_system_request` | `system_write` | **high** (single call can put the entire cluster in Protect) |
+| PATCH | `/v1/domain` | Batch namespace config — toggles `tag_per_domain` for all namespaces | `RESTDomainConfigData` — **absent from B** | `nv_set_namespace_defaults` | `system_write` | low |
+| POST | `/v1/scan/sigstore/root_of_trust` | Create a sigstore root of trust for image-signature verification | `REST_SigstoreRootOfTrust_POST` — **absent from B** | `nv_create_sigstore_root` | `scan_ops` | med (trust anchor) |
+| PATCH | `/v1/scan/sigstore/root_of_trust/{root_name}` | Update a sigstore root of trust | `REST_SigstoreRootOfTrust_PATCH` — **absent from B** | `nv_update_sigstore_root` | `scan_ops` | med |
+| DELETE | `/v1/scan/sigstore/root_of_trust/{root_name}` | Delete a root of trust and all its verifiers | — | `nv_delete_sigstore_root` | `scan_ops` | **high** (silently stops signature enforcement) |
+| POST | `/v1/scan/sigstore/root_of_trust/{root_name}/verifier` | Add a signature verifier (cosign key / keyless identity) | `REST_SigstoreVerifier` — **absent from B** | `nv_create_sigstore_verifier` | `scan_ops` | **high** (a bad key admits unsigned images) |
+| PATCH | `/v1/scan/sigstore/root_of_trust/{root_name}/verifier/{verifier_name}` | Update a verifier | `REST_SigstoreVerifier_PATCH` — **absent from B** | `nv_update_sigstore_verifier` | `scan_ops` | **high** |
+| DELETE | `/v1/scan/sigstore/root_of_trust/{root_name}/verifier/{verifier_name}` | Delete a verifier | — | `nv_delete_sigstore_verifier` | `scan_ops` | med |
+| POST | `/v1/scan/platform/platform` | Trigger a rescan of the Kubernetes platform itself | — (no body) | extend `nv_trigger_scan` with `target='platform'` | `scan_ops` | low |
+| POST | `/v1/file/config` | Export the full cluster config as YAML (`?scope=`) | — (no body; returns `RESTRemoteExportData`) | `nv_export_config(kind='all')` | `system_write` | **high** (export bundle contains registry creds / webhook URLs) |
+| POST | `/v1/file/group` | Export group + process/file/DLP/WAF policy as YAML (`?scope=`) | `RESTGroupExport` — **absent from B** | `nv_export_config(kind='group')` | `system_write` | med |
+| POST | `/v1/file/admission` | Export admission rules as YAML (`?scope=`) | `RESTAdmCtrlRulesExport` — **absent from B** | `nv_export_config(kind='admission')` | `system_write` | low |
+| POST | `/v1/file/dlp` | Export DLP sensors as YAML (`?scope=`) | `RESTDlpSensorExport` — **absent from B** | `nv_export_config(kind='dlp')` | `system_write` | low |
+| POST | `/v1/file/waf` | Export WAF sensors as YAML (`?scope=`) | `RESTWafSensorExport` — **absent from B** | `nv_export_config(kind='waf')` | `system_write` | low |
+| POST | `/v1/file/response/rule` | Export response rules as YAML (`?scope=`) | `RESTResponseRulesExport` — **absent from B** | `nv_export_config(kind='response')` | `system_write` | low |
+| POST | `/v1/file/compliance/profile` | Export compliance profiles as YAML | `RESTCompProfilesExport` — **absent from B** | `nv_export_config(kind='compliance')` | `system_write` | low |
+| POST | `/v1/file/vulnerability/profile` | Export vulnerability profiles as YAML | `RESTVulnProfilesExport` — **absent from B** | `nv_export_config(kind='vulnerability')` | `system_write` | low |
+| POST | `/v1/file/group/config` | **Import** group/policy YAML (async, poll `GET /v1/file/group/config`) | `string` (raw YAML body) | `nv_import_config(kind='group')` | `system_write` | **high** (overwrites live policy wholesale) |
+| POST | `/v1/file/admission/config` | **Import** admission rule YAML (`?scope=`) | `string` (raw YAML body) | `nv_import_config(kind='admission')` | `system_write` | **high** |
+| POST | `/v1/file/dlp/config` | **Import** DLP sensor YAML (`?scope=`) | `string` (raw YAML body) | `nv_import_config(kind='dlp')` | `system_write` | **high** |
+| POST | `/v1/file/waf/config` | **Import** WAF sensor YAML (`?scope=`) | `string` (raw YAML body) | `nv_import_config(kind='waf')` | `system_write` | **high** |
+| POST | `/v1/file/response/rule/config` | **Import** response rule YAML (`?scope=`) | `string` (raw YAML body) | `nv_import_config(kind='response')` | `system_write` | **high** |
+| POST | `/v1/file/compliance/profile/config` | **Import** compliance profile YAML | `string` (raw YAML body) | `nv_import_config(kind='compliance')` | `system_write` | **high** |
+| POST | `/v1/file/vulnerability/profile/config` | **Import** vulnerability profile YAML | `string` (raw YAML body) | `nv_import_config(kind='vulnerability')` | `system_write` | **high** |
+| POST | `/v1/system/config/remote_repository` | Register a Git remote as an export destination | `RESTRemoteRepository` — **B:1058** (`RESTRemoteRepo_GitHubConfig` B:1047) | `nv_create_remote_repository` | `system_write` | med (stores a Git PAT) |
+| PATCH | `/v1/system/config/remote_repository/{alias}` | Update a remote export repository | `RESTRemoteRepositoryConfigData` — **absent from B** | `nv_update_remote_repository` | `system_write` | med |
+| DELETE | `/v1/system/config/remote_repository/{alias}` | Delete a remote export repository | — | `nv_delete_remote_repository` | `system_write` | low |
+
+**Total in-scope missing write endpoints: 51.**
+
+### Read-shaped POSTs (missing, but not write work)
+These are `POST` only because the query is too large for a query string. They belong in **read** toolsets and must **not** get a `confirm` param (`verify_spec.py:171` fails a read tool that has one):
+
+| method | path | what it does | schema | suggested tool | toolset | risk |
+|---|---|---|---|---|---|---|
+| POST | `/v2/workload` | Fetch many workloads by id list | `RESTAssetIDList` — absent from B | fold into `nv_list_workloads` | `inventory` | low |
+| POST | `/v1/scan/workloads/scan_report` | Bulk scan reports for a workload id list | `RESTAssetsScanReportQuery` — absent from B | `nv_get_bulk_scan_reports` | `vulnerability` | low |
+| POST | `/v1/scan/hosts/scan_report` | Bulk scan reports for a host id list | `RESTAssetsScanReportQuery` — absent from B | `nv_get_bulk_scan_reports` | `vulnerability` | low |
+
+---
+
+## 4. Work packages (8)
+
+Each is one implementer's ticket. Sizes given as (endpoints → tools).
+
+**P1 — DLP writes** (4 → 4). `policy_write`.
+`POST/PATCH/DELETE /v1/dlp/sensor[/{name}]` + `PATCH /v1/dlp/group/{name}`.
+Mirror the WAF implementation almost exactly: `policy_write.py:1046-1400` is a line-for-line template (`nv_create_waf_sensor` / `nv_update_waf_sensor` / `nv_delete_waf_sensor` / `nv_set_waf_group`). Read side already exists (`nv_list_dlp_sensors`, `policy_read.py:363` → `policy_read.py:402`); note there is **no** `nv_get_dlp_sensor` / `nv_list_dlp_groups` yet, so add those reads to `policy_read` or the write tools will have no id-resolution path.
+
+**P2 — Response rule writes + notification destinations** (7 → 7). `policy_write` + `system_write`.
+`PATCH/DELETE /v1/response/rule`, `PATCH/DELETE /v1/response/rule/{id}`, plus webhook CRUD (`POST/PATCH/DELETE /v1/system/config/webhook[/{name}]`). Grouped because a response rule's `webhooks` field references webhook names — implementing one without the other leaves dangling references. Batch tool copies `nv_apply_network_rule_changes` (`policy_write.py:450-680`). Read side exists at `policy_read.py:281`.
+
+**P3 — Vulnerability profile writes** (4 → 4). `system_write`.
+`PATCH /v1/vulnerability/profile/{name}` + entry `POST/PATCH/DELETE`. Read side exists (`nv_get_vulnerability_profile`, `vulnerability.py:449` → `vulnerability.py:479`). `RESTVulnerabilityProfileConfigData` is fully documented at B:1824, so this is the best-specified package. Emphasise in docstrings that these tools **suppress** CVE findings.
+
+**P4 — Compliance profile &amp; custom check writes** (4 → 4). `system_write`.
+`PATCH /v1/compliance/profile/{name}`, `PATCH/DELETE /v1/compliance/profile/{name}/entry/{check}`, `PATCH /v1/custom_check/{group}`. Read side exists (`compliance.py:192,235`). The custom-check tool ships a shell script to the enforcer — treat as the highest-privilege tool in the server; consider gating it behind its own confirm text.
+
+**P5 — Rule-set gap closers** (3 → 3). `policy_write` + `admission`.
+`PATCH /v1/policy/rule/{id}` (single-rule update, currently only reachable via the whole-batch `CONFIGURE` path at `policy_write.py:662`), `DELETE /v1/policy/rule` (all in scope), `DELETE /v1/admission/rules` (all in scope). Small but the two bulk deletes are the most destructive endpoints in the API — they need an explicit count-of-rules-to-be-deleted in the plan text.
+
+**P6 — Sigstore image-signature trust + platform scan** (7 → 7). `scan_ops`.
+Root-of-trust CRUD, verifier CRUD, and adding `target='platform'` to `nv_trigger_scan` (`scan_ops.py:74` Literal, `scan_ops.py:130` path builder). Also needs the two `GET` reads (`/v1/scan/sigstore/root_of_trust[/{root_name}][/verifier...]`) which are likewise unimplemented. Self-contained, no overlap with any other package.
+
+**P7 — Service / workload / namespace writes** (4 → 4). `policy_write`, `runtime_ops`, `system_write`.
+`POST /v1/service`, `PATCH /v1/workload/{id}`, `POST /v1/system/request`, `PATCH /v1/domain`. `RESTServiceConfigData` (B:1347) and `RESTSystemRequestData` (B:1636) are documented. `nv_apply_system_request` must be flagged as cluster-wide — it can set `policy_mode` for everything in one call, which is strictly more dangerous than `nv_set_service_mode` (`runtime_ops.py:161`).
+
+**P8 — Config export / import + remote repository** (18 → ~5). `system_write`.
+8 export endpoints collapse into one `nv_export_config(kind=…)` tool, 7 import endpoints into one `nv_import_config(kind=…)`, plus 3 remote-repository CRUD tools. Import is asynchronous (`GET /v1/file/group/config` returns `RESTImportTaskData`, B:753) so it needs a poll/status companion. Export output must run through `redact_secrets` — the full-config export contains registry credentials and webhook URLs. Largest endpoint count but smallest tool count; do it last.
+
+---
+
+## 5. Excluded (platform admin / out of scope)
+
+Not in any package. All are documented writes; none is a security-policy operation.
+
+- **Users / roles / password**: `POST /v1/user`, `PATCH/DELETE /v1/user/{fullname}`, `POST /v1/user/{fullname}/password`, `PATCH /v1/user/{fullname}/role/{role}`, `POST /v1/user_role`, `PATCH/DELETE /v1/user_role/{name}`, `PATCH /v1/password_profile/{name}`. (First five already implemented — `iam_write.py:197,311,375,494,568`.)
+- **Auth servers (LDAP/SAML/OIDC) &amp; sessions**: `POST /v1/server`, `PATCH/DELETE /v1/server/{name}`, `PATCH /v1/server/{name}/role/{role}`, `POST/PATCH/DELETE /v1/auth`, `POST /v1/auth/{server}`.
+- **API keys**: `POST /v1/api_key`, `DELETE /v1/api_key/{accesskey}` (already implemented — `iam_write.py:494,568`).
+- **Sniffer / packet capture**: `POST /v1/sniffer`, `PATCH /v1/sniffer/stop/{id}`, `DELETE /v1/sniffer/{id}` (first two implemented — `runtime_ops.py:393,456`; `DELETE /v1/sniffer/{id}` is unimplemented but out of scope).
+- **Federation / multi-cluster**: `POST /v1/file/fed_config`, plus **`POST /v1/admission/rule/promote`** and **`POST /v1/policy/rules/promote`** — these promote a local rule into the federated ruleset and only function on a federation master, so they carry the whole multi-cluster dependency.
+- **License / EULA / support**: `POST /v1/eula`, `POST /v1/csp/file/support`.
+- **Component (infra) config**: `PATCH /v1/controller/{id}`, `PATCH /v1/enforcer/{id}` — debug/log-level knobs on NeuVector's own pods.
+- **Superseded v1 duplicates of implemented v2 routes** (implement only if v1-only controllers must be supported): `PATCH /v1/system/config` (v2 done at `system.py:468`), `POST /v1/scan/registry` (v2 done at `scan_ops.py:573`), `PATCH /v1/scan/registry/{name}` (v2 done at `scan_ops.py:728`).
+- **All 112 undocumented routes** in `A-endpoint-inventory.md:250-363` — notably `POST/PATCH/DELETE /v1/dlp/rule[/{name}]` (predefined DLP rule CRUD, `A-endpoint-inventory.md:283-285`). These are gated by `NV_ALLOW_UNDOCUMENTED` (`config.py:125`) and `verify_spec.py` treats them as a separate set; adding any requires an explicit spec amendment.</result>
+<usage><subagent_tokens>86889</subagent_tokens><tool_uses>26</tool_uses><duration_ms>315894</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a44923f0d2f13f684</task-id>
+<tool-use-id>toolu_01GnzbWgRJWJw9uozWttyALs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/dc58c014-b201-4eab-9606-2a6be47bd6b7/tasks/a44923f0d2f13f684.output</output-file>
+<status>completed</status>
+<summary>Agent "P5 rule-set gap closers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>P5 is complete and green.
+
+## Tools added
+
+`src/neuvector_mcp/tools/ruleset_ops.py` (new), `tests/test_ruleset_ops.py` (new, 19 tests).
+
+| tool | endpoint | toolset | annotations |
+|---|---|---|---|
+| `nv_update_network_rule` | `PATCH /v1/policy/rule/{id}` | `policy_write` | MUTATING |
+| `nv_delete_all_network_rules` | `DELETE /v1/policy/rule` (+`scope`) | `policy_write` | MUTATING |
+| `nv_delete_all_admission_rules` | `DELETE /v1/admission/rules` (+`scope`) | `admission` | MUTATING |
+
+`register()` gates the two toolsets separately. `server.py` got exactly two one-line insertions (`ruleset_ops` in the import block and in `TOOL_MODULES`); nothing else changed. **`models.py` was not touched at all** — the P5 anchor block is still empty, because the design below needs no `*Input` model. That removes one source of concurrent-edit contention.
+
+## Exact `effect` text of the two bulk deletes
+
+Rendered with `expected_rule_count=137` / `12`, `scope="local"`:
+
+**`nv_delete_all_network_rules`**
+&gt; Delete ALL 137 network policy rules in scope 'local' - scope 'local' means THIS cluster's own rules; federated rules pushed by a federation primary are left alone. The count 137 is what YOU asserted from nv_list_network_rules(scope='local'); it is not verified against the controller and it does not limit the delete, so if it is wrong the number actually destroyed is different and is still every rule in the scope. The rule list ends up EMPTY. Every group in Protect mode then DROPS the traffic these rules were allowing, immediately and without warning: running applications lose connectivity as soon as this call returns. Traffic that these rules were denying stops being denied. The controller keeps no copy and there is no undo - recovery means re-creating every rule by hand, so export the current list with nv_list_network_rules(scope='local') and keep it before confirming.
+
+**`nv_delete_all_admission_rules`**
+&gt; Delete ALL 12 admission control rules in scope 'local' - scope 'local' means THIS cluster's own rules; federated rules pushed by a federation primary are left alone. The count 12 is what YOU asserted from nv_list_admission_rules(scope='local'); it is not verified against the controller and it does not limit the delete, so if it is wrong the number actually destroyed is different and is still every rule in the scope. The cluster STOPS GATING DEPLOYMENTS entirely and immediately: with no rules left, admission control admits every pod, including images with critical vulnerabilities, unscanned images and privileged containers that were being denied a moment ago. Exception (allow) rules are deleted along with deny rules, so this is not a loosening of policy, it is a switch-off. Admission control still reports itself as enabled in nv_get_admission_state, so nothing will look wrong while nothing is being checked. There is no undo and the controller keeps no copy - export the current list with nv_list_admission_rules(scope='local') and keep it before confirming.
+
+With `scope="fed"` the clause becomes "scope 'fed' means the FEDERATED rules, which a federation primary pushes to every member cluster - deleting them removes those rules from every member, not only from this one" (wording follows the `scope` query-param descriptions in apis.yaml).
+
+`expected_rule_count` is implemented as briefed. It is bound into the guard `target` string (`all network policy rules in scope 'local' (caller asserts 137 rule(s))`), not into the payload — both endpoints take no body, so `payload=None`. That makes the confirm token invalidate when the asserted count changes, which is tested. Five-step ordering is intact; no controller call precedes the plan.
+
+## How I determined the omitempty / partial-update semantics
+
+From apis.go, which the conventions make authoritative over apis.yaml:
+
+```go
+// Omit fields indicate that it's not modified.
+type RESTPolicyRuleConfig struct {
+	ID           uint32    `json:"id"`
+	Comment      *string   `json:"comment,omitempty"`
+	From         *string   `json:"from,omitempty"`
+	To           *string   `json:"to,omitempty"`
+	Ports        *string   `json:"ports,omitempty"`
+	Action       *string   `json:"action,omitempty"`
+	Applications *[]string `json:"applications,omitempty"`
+	Disable      *bool     `json:"disable,omitempty"`
+	CfgType      string    `json:"cfg_type"`
+	Priority     uint32    `json:"priority,omitempty"`
+}
+type RESTPolicyRuleConfigData struct {
+	Config    *RESTPolicyRuleConfig `json:"config"`
+	Replicate bool                  `json:"replicate,omitempty"`
+}
+```
+
+The struct comment states omission means "not modified" outright, and every mutable field is a pointer with `omitempty` — a nil pointer marshals to an absent key, never `null`. So absence is the "leave alone" signal, and a key present with any value (including a default) is an overwrite instruction. `id` and `cfg_type` are the two non-pointer fields and apis.yaml lists exactly those two under `required`, so `_rule_config_body` always emits them. apis.yaml agrees with apis.go on field names here; no conflict to resolve.
+
+## Deviation from the brief, with the argument
+
+**I did not reuse `NetworkRuleInput` / `_rule_body` for `nv_update_network_rule`.** Doing so would have produced a functionally wrong tool:
+
+- `_rule_body` renders a `RESTPolicyRule` (the batch CONFIGURE shape), not a `RESTPolicyRuleConfig`, and is not nested under `"config"` — the wrong wire shape for this endpoint.
+- `NetworkRuleInput` cannot express a partial update. `from_group`/`to_group`/`action` are required; `ports` defaults to `"any"`, `applications` to `[]`, `comment` to `""`, `disable` to `False`. Rendering it always emits every key, so a caller who only wanted to flip `action` would silently reset the rule's ports to `any` and blank its comment. That is the same class of failure as the 1.0.3 policy-mode bug, only worse — a 200 that applies changes nobody asked for.
+
+Instead the tool takes flat optional scalars (`from_group`, `to_group`, `action`, `ports`, `applications`, `comment`, `disable`, all defaulting to `None`) and a module-local `_rule_config_body` helper writes each key explicitly. No parallel `*Input` model was created, so the "don't define parallel models" intent is honoured — there is simply no model to share. `applications=[]` is distinguished from omitted: `[]` is sent (meaning "any application"), `None` omits.
+
+The docstring states when to use which tool: this one for partial changes to one rule; `nv_apply_network_rule_changes` when several rules must change atomically or when order matters, since only the batch tool can insert/move/delete and its `configure_rules` entries overwrite the whole rule.
+
+## Limitation I did not paper over
+
+`cfg_type` is hardcoded to `"user_created"`. apis.yaml's enum also allows `learned`, `ground` and `federal`, but `PATCH /v1/policy/rule/{id}` has no `scope` query parameter, and I have no offline evidence for how the controller treats a federal-rule PATCH carrying `cfg_type: user_created` (conversion? rejection? silent drop?). Rather than guess, the tool updates user-created local rules only and the docstring says learned rules are rejected with code 4. Federated single-rule updates are out of scope for P5 — flag if the coordinator wants them.
+
+## Gate results
+
+- `pytest tests/test_ruleset_ops.py -q` — 19 passed.
+- `ruff check` + `ruff format --check` — clean on my two files. Note: `src/neuvector_mcp/tools/compliance_write.py` (P4, not mine) currently fails `ruff format --check`; I left it alone.
+- `mypy` — Success, no issues in 28 source files.
+- `verify_spec.py` — R1–R7 and R9 all pass across 98 tools. **All three of my tools pass every rule, including R6** (all three routes were confirmed in `spec_endpoints.json` `documented` before implementing; no `UNDOCUMENTED_ALLOWLIST` entry needed). 11 R8 violations exist, none of them mine — `nv_get_dlp_sensor`, `nv_list_dlp_groups`, `nv_get_dlp_group`, `nv_create_dlp_sensor`, `nv_update_dlp_sensor`, `nv_delete_dlp_sensor`, `nv_set_dlp_group` (P1) and `nv_update_compliance_profile`, `nv_set_compliance_check_tags`, `nv_delete_compliance_check_tags`, `nv_set_custom_compliance_checks` (P4) have no test referencing their names yet. Reported, not fixed.
+
+No commits, branches or pushes. No cluster or controller access of any kind.</result>
+<usage><subagent_tokens>103896</subagent_tokens><tool_uses>41</tool_uses><duration_ms>420729</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a341899c584e7f58b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/dc58c014-b201-4eab-9606-2a6be47bd6b7/tasks/a341899c584e7f58b.output</output-file>
+<status>completed</status>
+<summary>Agent "P1 DLP write tools" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>P1 — DLP writes is complete.
+
+## Tools added (`src/neuvector_mcp/tools/dlp.py`)
+
+Writes, `{"policy_write", "write"}`, all with `confirm`:
+- `nv_create_dlp_sensor` — POST /v1/dlp/sensor
+- `nv_update_dlp_sensor` — PATCH /v1/dlp/sensor/{name}
+- `nv_delete_dlp_sensor` — DELETE /v1/dlp/sensor/{name}
+- `nv_set_dlp_group` — PATCH /v1/dlp/group/{name}
+
+Reads, `{"policy_read", "read"}`, no `confirm` — all three routes verified present in `spec_endpoints.json` `documented`, none skipped:
+- `nv_get_dlp_sensor` — GET /v1/dlp/sensor/{name}
+- `nv_list_dlp_groups` — GET /v1/dlp/group
+- `nv_get_dlp_group` — GET /v1/dlp/group/{name}
+
+`nv_list_dlp_sensors` was left alone in `policy_read.py`; `SensorBrief`/`DlpSensorList` reused, not duplicated. Read/write groups are gated separately in `register()`.
+
+## Wire-shape findings from apis.go (5.6.0)
+
+DLP's structs are field-for-field identical to WAF's except where noted, so the WAF template held — but three pointer/omitempty details would have been got wrong by copying WAF verbatim:
+
+1. **`RESTDlpSensorConfig.Comment` is `*string` + `omitempty`.** Omitting means "leave unchanged"; `""` means "clear it". `nv_update_waf_sensor` sends `"comment": comment` unconditionally with a `""` default, so a WAF update that doesn't restate the comment **silently wipes it**. `RESTWafSensorConfig.Comment` is the same pointer type, so this is a live (small) bug in the shipped WAF tool — flagging it rather than touching that file. DLP's tools take `comment: str | None = None` and omit the key entirely when unset.
+
+2. **`RESTDlpGroupConfig.Status` is `*bool` + `omitempty`.** `nv_set_waf_group` defaults `status=True` and always sends it, so binding sensors on a group where inspection was deliberately off silently re-enables it. `nv_set_dlp_group` takes `status: bool | None = None` and omits the key when unset; the plan text says which of the two applies.
+
+3. **`RESTDlpCriteriaEntry.Context` is `omitempty` and has no documented value set for DLP** (apis.yaml refs the generic `RESTCriteriaEntry`, which documents only `key`/`value`/`op`). The input model accepts the WAF value set as an optional field and **omits `context` from the body when unset** rather than inventing a default. This is the one genuinely ambiguous field — it is not verified for DLP.
+
+Other differences worth recording:
+- **apis.yaml is wrong about `RESTDlpGroupConfig.sensors`/`replace`**: it says `RESTDlpSetting`; apis.go says `*[]RESTDlpConfig` (`{name, action, comment?}`). apis.go wins per conventions, so `replace` sends `{name, action}` — same as the live-verified WAF shape.
+- **`RESTDlpSetting` carries `predefine`, which `RESTWafSetting` does not** — DLP ships predefined sensors, so `DlpGroupSensor` exposes `predefined`.
+- `RESTDlpRule.id`/`cfg_type` are controller-assigned (ids from `MinDlpRuleID` 20000) and are not sent; `cfg_type: "user_created"` goes on the config on create only, not on PATCH (mirrors WAF).
+- `GET /v1/dlp/group` documents **no `scope` parameter** (WAF's does), so none is sent and paging is client-side. Asserted by a test.
+- Added real controller limits as constants from apis.go and enforce them pre-guard via `ValidationError_`: 16 patterns/rule, 512 chars/pattern, 1024 chars total/rule, 256-char names and comment.
+
+## Verification
+
+- `pytest tests/test_dlp.py -q` — **32 passed**. Full suite: **530 passed, 1 xfail**, no regressions from the `models.py` edit.
+- `ruff check src tests` + `ruff format --check src tests` — clean (I reformatted only my own files; the two other in-flight modules that were failing `format --check` have since been fixed by their owners).
+- `mypy` — clean, 29 source files.
+- `verify_spec.py` — 106 tools; R1–R7 and R9 all pass. **8 R8 violations, none mine**, all P2/`response_write`: `nv_get_response_rule_options`, `nv_apply_response_rule_changes`, `nv_update_response_rule`, `nv_delete_response_rule`, `nv_delete_all_response_rules`, `nv_create_webhook`, `nv_update_webhook`, `nv_delete_webhook` — that agent's test file doesn't yet reference the names. Left for them.
+
+## Files touched
+
+`src/neuvector_mcp/tools/dlp.py` (new), `tests/test_dlp.py` (new), the P1 anchor block in `src/neuvector_mcp/models.py`, and two one-line insertions in `src/neuvector_mcp/server.py`. Nothing else. No new toolset needed — reused `policy_write`/`policy_read`, so no `config.py` change. No commits, branches, or controller access.
+
+One judgement call to flag: the P1 anchor is labelled "inputs for tools/dlp.py", but R7 requires output models for the three read tools and there was no other block I'm permitted to write to, so the DLP output projections (`DlpPattern`, `DlpRule`, `DlpSensorDetail`, `DlpGroupSensor`, `DlpGroup`, `DlpGroupList`) live under that anchor too, with a comment saying so. Move them if you'd rather they sat elsewhere.</result>
+<usage><subagent_tokens>130792</subagent_tokens><tool_uses>46</tool_uses><duration_ms>669825</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0c2f00a972e69c63</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/dc58c014-b201-4eab-9606-2a6be47bd6b7/tasks/a0c2f00a972e69c63.output</output-file>
+<status>completed</status>
+<summary>Agent "P6 sigstore trust + platform scan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>P6 is complete. Everything green.
+
+## Tools added
+
+**Writes, toolset `scan_ops`** (`src/neuvector_mcp/tools/sigstore.py`):
+
+| tool | endpoint |
+|---|---|
+| `nv_create_sigstore_root` | POST `/v1/scan/sigstore/root_of_trust` |
+| `nv_update_sigstore_root` | PATCH `/v1/scan/sigstore/root_of_trust/{root_name}` |
+| `nv_delete_sigstore_root` | DELETE `/v1/scan/sigstore/root_of_trust/{root_name}` |
+| `nv_create_sigstore_verifier` | POST `/v1/scan/sigstore/root_of_trust/{root_name}/verifier` |
+| `nv_update_sigstore_verifier` | PATCH `/v1/scan/sigstore/root_of_trust/{root_name}/verifier/{verifier_name}` |
+| `nv_delete_sigstore_verifier` | DELETE `/v1/scan/sigstore/root_of_trust/{root_name}/verifier/{verifier_name}` |
+
+**Reads, toolset `vulnerability`**: `nv_list_sigstore_roots` (GET `/v1/scan/sigstore/root_of_trust`), `nv_get_sigstore_root` (GET `.../{root_name}`), `nv_list_sigstore_verifiers` (GET `.../{root_name}/verifier`). No `confirm` param. The two toolsets are gated separately in `register()` via `_register_reads` / `_register_writes`.
+
+## POST vs PATCH optionality (from apis.go)
+
+- **`REST_SigstoreRootOfTrust_POST`**: `name`, `is_private`, `rootless_keypairs_only`, `comment` are plain values with **no `omitempty`** → always sent (a `False` is meaningful, not "unset"). `rekor_public_key`, `root_cert`, `sct_public_key` carry `omitempty` → `_root_post_body()` omits them when empty.
+- **`REST_SigstoreRootOfTrust_PATCH`**: only four fields, **all `*string` + `omitempty`** — `rekor_public_key`, `root_cert`, `sct_public_key`, `comment`. Omitted = "not modified", so the tool sends only supplied args; an explicit `""` is treated as a deliberate clear and the plan says so ("becomes an EMPTY string, which CLEARS that trust material"). `name`/`is_private`/`rootless_keypairs_only` are **absent from the PATCH struct** and therefore not settable — the `ValidationError_` text says so.
+- **`REST_SigstoreVerifier`** (the POST body): all six fields plain strings, **no `omitempty`** → all six always sent, including the ones irrelevant to the chosen type.
+- **`REST_SigstoreVerifier_PATCH`**: all five **pointers + `omitempty`**; `name` absent. Same omit-what-wasn't-supplied handling.
+
+Field names (`verifier_type` ∈ `keypair|keyless`, `public_key`, `cert_issuer`, `cert_subject`) came from apis.go lines 4017–4032, corroborated by apis.yaml `REST_SigstoreVerifier`; cited in code comments.
+
+**One unresolved schema disagreement, handled defensively**: apis.go declares the collections as `{"roots_of_trust": [...]}` / `{"verifiers": [...]}` while apis.yaml declares the same definitions as bare arrays. apis.go wins per house rule, but the readers accept either shape — guessing wrong would render a successful read as an empty list, which reads to an operator as "no signature verification configured". Same for the single-root GET (swagger says bare object, no Go wrapper exists; bare is tried first, a `root_of_trust` envelope is a fallback). Both are documented in code and covered by tests. Not verifiable offline.
+
+## Secrets
+
+**Confirmed against the Go structs: none.** Every field on `REST_SigstoreRootOfTrust_{GET,POST,PATCH}` and `REST_SigstoreVerifier{,_PATCH}` is a name, bool, comment, PEM **public** key, or certificate identity. No private-key/password/token field exists, and none of the names appear in `SECRET_FIELDS` (`models.py:233`). So these tools deliberately do **not** call `redact_secrets` — masking a public key would hide the one value an operator must eyeball in the preview. Documented in the module docstring and the models anchor.
+
+## Security framing
+
+`nv_delete_sigstore_root`'s effect states the cascade explicitly: deletes every verifier under the root, images that relied on them are no longer signature-checked, unsigned/attacker-signed images are admitted, and "admission control continues to report itself as ENABLED, because the check does not fail, it stops existing." `nv_delete_sigstore_verifier` names both directions (blocked deploys vs. last-verifier-gone). `nv_create_sigstore_verifier` rejects (locally, before the guard, no controller call) a `keypair` with no `public_key` and a `keyless` with a blank `cert_issuer`/`cert_subject` — the controller accepts both, and an empty keyless field is a match-anything wildcard. The PATCH tools warn when an empty string would create that wildcard.
+
+## Platform scan — the one `scan_ops.py` edit
+
+Added `"platform"` to the `target` Literal, a first branch in the path builder (`/v1/scan/platform/platform` — the platform is a singleton, so `target_id` is not interpolated), and the `Calls POST /v1/scan/platform/platform with target='platform'.` docstring line. One incidental fix was unavoidable: the `timeout_s: float | None` annotation had to move from the registry branch to the new first branch, or mypy flags a redefinition. Three tests in my file cover it, including one asserting `target_id` never reaches the path.
+
+**Awkwardness worth flagging (not restructured):** `target_id` stays required and meaningless for `platform`; callers must pass a dummy (docstring/field description say to pass `"platform"`). Making it optional would have changed the signature for all four targets. Also, no read tool surfaces the platform scan result — `GET /v1/scan/platform` is in `documented` but unimplemented, and `nv_get_scan_report` has no `platform` target. Noted in a code comment; a follow-up package could add it.
+
+## Gate results
+
+- `pytest tests/test_sigstore.py -q` → 33 passed
+- `pytest tests/test_scan_ops.py -q` → 35 passed
+- `ruff check src tests` → clean; `ruff format --check` → 52 files already formatted
+- `mypy` → no issues in 31 source files
+- `verify_spec.py` → **119 tools, 0 violations across R1–R9** — no violations from any other agent's in-flight work either
+
+One lint note: ruff's `S608` (SQL-injection heuristic) fired twice on my effect strings, matching the `update ... set ` pattern across "Update sigstore …" + "is being set to an EMPTY string". Reworded to "becomes an EMPTY string" rather than adding a `noqa`.
+
+Files: `src/neuvector_mcp/tools/sigstore.py` (new), `tests/test_sigstore.py` (new), `src/neuvector_mcp/models.py` (P6 anchor appended at EOF with `SigstoreVerifierEntry`, `SigstoreRootOfTrust`, `SigstoreRootList`, `SigstoreVerifierList`), `src/neuvector_mcp/server.py` (two one-line insertions), `src/neuvector_mcp/tools/scan_ops.py` (platform branch only). P7's concurrent `service_ops` insertions landed in `server.py` alongside mine without conflict.</result>
+<usage><subagent_tokens>168211</subagent_tokens><tool_uses>56</tool_uses><duration_ms>719959</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a207c3f524b6bb560</task-id>
+<tool-use-id>toolu_01D28Znd2bqD8D64qPHjitzY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/dc58c014-b201-4eab-9606-2a6be47bd6b7/tasks/a207c3f524b6bb560.output</output-file>
+<status>completed</status>
+<summary>Agent "P7 service workload system writes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>P7 complete. All gates green.
+
+## Tools added — `src/neuvector_mcp/tools/service_ops.py`
+
+| tool | endpoint | toolset | annotation |
+|---|---|---|---|
+| `nv_create_service` | `POST /v1/service` | policy_write | MUTATING_CREATE |
+| `nv_update_workload_config` | `PATCH /v1/workload/{id}` | runtime_ops | MUTATING |
+| `nv_apply_system_request` | `POST /v1/system/request` | system_write | MUTATING |
+| `nv_set_namespace_defaults` | `PATCH /v1/domain` | system_write | MUTATING_IDEMPOTENT |
+
+Each toolset gated separately in `register()` via three `_register_*` helpers; a gating test asserts no cross-leak.
+
+## `policy_mode` on `POST /v1/service` — verified, and it is real
+
+apis.go `RESTServiceConfig` (line 2207) declares `PolicyMode *string \`json:"policy_mode,omitempty"\``, and `RESTServiceConfigData` is referenced exactly **once** in apis.yaml — as the `POST /v1/service` request body. apis.yaml's `RESTServiceConfig` and Appendix B (line ~1347) both list `policy_mode` too. So all three sources agree: unlike the 1.0.3 bug (where `RESTGroupConfig` had no such field at all), this field genuinely exists on the creation body. Implemented.
+
+**`profile_mode` deliberately NOT implemented** on either `nv_create_service` or `nv_apply_system_request`. apis.go declares it on both `RESTServiceConfig` and `RESTSystemRequest`, but neither the 5.6.0 apis.yaml nor Appendix B does. Two 5.6.0-era sources against one — exactly the 200-and-drop shape. Docstrings point at `nv_set_service_mode(scope='profile')`, which selects the dimension by route rather than by field. A test pins `profile_mode` out of the wire body.
+
+Sent for create: `name`, `domain`, `comment` (always — apis.go has it as `*string` **without** omitempty and all sources mark it required), plus `policy_mode`/`baseline_profile`/`not_scored` only when supplied.
+
+## `NV_ALLOWED_NAMESPACES` gap on `nv_apply_system_request`
+
+`POST /v1/system/request` carries no namespace anywhere in its body, so `authorise_write(namespace=None)` — the allowlist check in `guard.py:90` never fires. **A server configured with `NV_ALLOWED_NAMESPACES` still applies this to every namespace, including ones outside the allowlist.** Stated in three places: the docstring (own paragraph, in caps), the guard `effect` text, and a test (`test_apply_system_request_ignores_namespace_allowlist`) that asserts `route.call_count == 1` under a `staging`-only allowlist so the gap is a pinned, visible property rather than an oversight. Docstring opens by naming `nv_set_service_mode` as the scoped alternative; the Protect `effect` spells out that blocking starts across every namespace the moment the call returns and breaks apps never observed in Discover.
+
+Sub-requests exposed as explicit named params (from apis.go `RESTSystemRequest`/`RESTUnquarReq`), not a free-form dict: `policy_mode`, `baseline_profile`, `unquarantine` (bool switch), `unquarantine_group`, `unquarantine_response_rule_id`. Filters without `unquarantine=true` are rejected; an all-empty request is rejected.
+
+## Quarantine: not duplicated, but the wire forces it
+
+I did **not** add a quarantine feature — but I could not avoid the field. apis.go `RESTWorkloadConfig.Quarantine` is a plain `bool` with **no `omitempty`**, and apis.yaml lists `quarantine` under `required`. apis.yaml binds `PATCH /v1/workload/{id}` to `RESTWorkloadConfigData`, which wraps that non-pointer type. (apis.go also has a pointer-valued `RESTWorkloadConfigCfgData`, but nothing in apis.yaml references it.) So **this route has no "leave quarantine alone"** — an omitted key decodes as `false`, and a naive wire-mode PATCH would silently release a quarantined container.
+
+Handling: `quarantine` is a **required** argument documented as the state the call *asserts*, to be echoed back from `nv_get_workload`; and `wire` is required via `ValidationError_` pointing at `nv_quarantine_workload`, so a quarantine-only call is refused and the two tools cannot become redundant paths. No pre-read (that would be a controller call before step 3), so the plan labels it a caller assertion — same precedent as `expected_rule_count` in P5.
+
+## `nv_set_namespace_defaults`
+
+apis.go `RESTDomainConfig` has exactly one field, `tag_per_domain` — so `PATCH /v1/domain` is a single cluster-wide switch and nothing else. Docstring contrasts it explicitly with `nv_set_namespace_tags` (`PATCH /v1/domain/{name}`, one namespace) and notes that turning it off makes every namespace's stored tags stop applying and makes `nv_set_namespace_tags` fail with code 4. A test asserts the request path is exactly `/v1/domain`.
+
+## Results
+
+- `pytest tests/test_service_ops.py -q` — **27 passed**
+- `ruff check` + `ruff format --check` on my files + server.py — clean
+- `mypy` — Success, no issues
+- `verify_spec.py` — 125 tools, 0 violations across R1–R9
+- Full suite (`pytest -q -p no:randomly`) — 626 passed, 1 xfail
+
+## Notes for the coordinator
+
+- **`models.py` untouched.** All four tools take scalars only; no nested `*Input` model was needed, so the `# --- inputs for tools/service_ops.py (P7) ---` anchor is intentionally left empty.
+- **`config.py` untouched** — `policy_write`, `runtime_ops`, `system_write` all already exist; no new toolset.
+- **`server.py`**: two one-line insertions only (`service_ops` in the import block and in `TOOL_MODULES`). Another agent added `config_transfer` concurrently; both survived.
+- **Not my violations, not fixed:** `ruff check src tests` reports two `S608` (false-positive "SQL injection" on f-string effect text) in `src/neuvector_mcp/tools/sigstore.py:592` and `:978`, and `ruff format --check` wants to reformat `src/neuvector_mcp/models.py`, `src/neuvector_mcp/tools/sigstore.py`, and `tests/test_sigstore.py`. Those are P6's files and shared `models.py`.
+- `wire` accepted values are enumerated in **no** source — apis.go, apis.yaml and Appendix B all lack them; apis.yaml only gives `example: default`. The parameter is a free string whose description says so and tells the caller to copy a value from a container already in the target mode. If the coordinator can get a real value list, that field description should be tightened to a `Literal`.</result>
+<usage><subagent_tokens>146763</subagent_tokens><tool_uses>43</tool_uses><duration_ms>909065</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a60c68b6398c6e848</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-rashford-Library-Mobile-Documents-com-apple-CloudDocs-Developer-neuvector-mcp/dc58c014-b201-4eab-9606-2a6be47bd6b7/tasks/a60c68b6398c6e848.output</output-file>
+<status>completed</status>
+<summary>Agent "P8 config export import" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>P8 is complete. Full gate green: 37 new tests + all 64 `test_client.py` tests pass, whole suite passes (1 pre-existing xfail), ruff/format/mypy clean, `verify_spec.py` 125 tools / 0 violations.
+
+## Tools added
+
+| Tool | Toolset | Endpoints |
+|---|---|---|
+| `nv_export_config` | `system_write` | `GET /v1/file/config` (kind=all), `POST /v1/file/{group,admission,dlp,waf,response/rule,compliance/profile,vulnerability/profile}` |
+| `nv_import_config` | `system_write` | `POST /v1/file/{group,admission,dlp,waf,response/rule,compliance/profile,vulnerability/profile}/config` |
+| `nv_get_import_status` | `policy_read` | `GET /v1/file/group/config` |
+| `nv_create_remote_repository` | `system_write` | `POST /v1/system/config/remote_repository` |
+| `nv_update_remote_repository` | `system_write` | `PATCH /v1/system/config/remote_repository/{alias}` |
+| `nv_delete_remote_repository` | `system_write` | `DELETE /v1/system/config/remote_repository/{alias}` |
+
+Files: `src/neuvector_mcp/tools/config_transfer.py`, `tests/test_config_transfer.py`, `ImportTaskStatus` under my anchor in `models.py`, two one-line insertions in `server.py`, additive change to `client.py`.
+
+## Findings you need to decide on
+
+**1. `POST /v1/file/config` is NOT an export — the brief is wrong about this.** apis.yaml 5.6.0 declares `GET /v1/file/config` = "Download a configure file" and `POST /v1/file/config` = "Upload configure file", `consumes: multipart/form-data`, `formData` file `configuration`. POSTing there to "export" would trigger a **whole-cluster configuration import**. I implemented `kind="all"` as the GET (also in `spec_endpoints.json` `documented`) and there is a regression test asserting the POST route is never called. I did **not** implement a whole-cluster import: multipart transport is unverified and it is the single most destructive call in the API.
+
+**2. The Git PAT committer-email field name conflicts across sources.** apis.go tags it `personal_access_token_email`; apis.yaml *and* Appendix B both document `personal_access_token_committer_email`. Per the conventions rule (apis.go wins) I send the apis.go name — the yaml name would be a silently-dropped field behind a 200, i.e. the exact 1.0.3 failure. Flagging because two of three sources disagree with what I shipped.
+
+**3. Git PAT is covered.** `personal_access_token` is already in `SECRET_FIELDS` (models.py:231, cited to `RESTRemoteRepo_GitHubConfig`). No change needed. My tools use the two-payload rule (`redact_secrets` for guard + result), and a test asserts the literal token appears nowhere in the serialised plan or outcome. **However**: `RESTImportTask.temp_token` is a resume bearer token and is *not* in `SECRET_FIELDS` — I drop it from the projection rather than surfacing it, but you may want it added.
+
+## `request_text` design
+
+Extracted the existing retry/relogin/classify loop verbatim into `NeuVectorClient._send`, which returns the raw `httpx.Response`. `request` is now `_send(...)` + `_safe_json(response) or {}` — byte-identical behaviour, and all 64 client tests pass unchanged. Two new public methods share that path: `request_text` (returns `response.text` in full, never truncated) and `send_document` (sends a raw UTF-8 body with `Content-Type: text/plain; charset=utf-8`, returns parsed JSON). `_send` gained `content=` and `extra_headers=`, both defaulting to None, so no existing call site changes shape.
+
+## Export size cap
+
+Default `max_characters=20000` (~5k tokens), bounds 1000–200000. When clipped, `controller_response.truncated=true` plus a hint naming the real length and that a truncated document is not importable. `kind="all"` always sets `truncated=true`/`withheld=true` and returns `yaml: ""`.
+
+**Deviation from the brief:** `truncated` lives inside `controller_response` (a declared field of `WriteOutcome`), not as a top-level field of a new output model. Reason: the guard returns a `WriteOutcome`, and the five-step rule says return the plan *verbatim*; a subclass return type would force reconstructing the plan. It is still machine-readable structured output. Change it if you'd rather I subclass.
+
+## What redaction does and does not catch — exactly
+
+No YAML parser is available (`pyproject.toml` deps are fastmcp/httpx/pydantic/structlog only), so `redact_yaml_secrets` is a **line filter**, not a parser.
+
+**Catches:** the seven `SECRET_FIELDS` names as block-mapping keys at any indentation, including as the first key of a sequence item (`- password: x`), with plain, quoted, or block-scalar values — and for `|`/`&gt;` it drops the whole indented block, so a multi-line `json_key` doesn't survive its header.
+
+**Does NOT catch** (each pinned by a test in `test_redactor_documented_blind_spots_are_real`, so the claim can't drift):
+- flow style — `creds: {password: hunter2}` passes through intact;
+- a token embedded in the *value* of an innocuous key — `url: https://hooks.example/T00/B00/s3cr3t` is returned verbatim;
+- any credential under a key name not in `SECRET_FIELDS`, including anything a future controller adds;
+- secrets inside free-text `comment`/`description`;
+- values the controller already emitted encrypted or base64-wrapped.
+
+Because a full cluster export is exactly the document where the blind spots bite (webhook URLs with tokens in the path, directory-server secrets), **`kind="all"` refuses to return the body**. It reports size, line count, and a count of credential key names detected — names and counts only, never values. Narrow kinds return redacted YAML with `credential_keys_found` so "0 found" is distinguishable from "redaction didn't run". `nv_import_config` also *rejects* a document still containing the `***` sentinel, so a round-trip can't store `'***'` as a live credential.
+
+## Import transport: documented shape, NOT verified
+
+apis.yaml lists `consumes: ["application/json", "text/plain; charset=utf-8"]` with `in: body, schema: {type: string}` for all seven `/config` routes — a raw body, not multipart (multipart appears only on `POST /v1/file/config`, which I excluded). I send `text/plain; charset=utf-8`. **Not verified against a controller.** Also unverified: whether an empty `names`/`ids` list means "everything" on the export endpoints (documented nowhere), and whether a partial `github_configuration` on the PATCH merges or replaces — both stated plainly in the tool descriptions and in the confirmation `effect`.
+
+## Deviation you should rule on
+
+`nv_get_import_status` is tagged **`policy_read`**, not `system_write`. CONVENTIONS is explicit that "a toolset is never mixed — read tools and write tools never share a tag", and R3/R5 would force `readOnlyHint=False` + a `confirm` parameter on a GET poll. Move it if you disagree.
+
+## Deliberately skipped
+
+- Whole-cluster import (`POST /v1/file/config`, multipart) — see finding 1.
+- `remote_export_options` on the export bodies (pushes to a Git repo instead of returning YAML; changes the response to `RESTRemoteExportData` JSON) — out of brief scope.
+- `X-Transaction-ID` header (transactional/resumable imports).
+- Azure DevOps provider — apis.yaml says GitHub is the only supported provider; `azure_devops_configuration` is omitted from the body rather than sent as null (pointer field, and a test asserts its absence).
+- `policy_mode`/`profile_mode` overrides on the group export, so an export always records modes as they actually are.
+
+No violations from other agents' in-flight tools appeared in verify_spec.</result>
+<usage><subagent_tokens>203429</subagent_tokens><tool_uses>62</tool_uses><duration_ms>1084950</duration_ms></usage>
+</task-notification>
+
+---
+
+Merge approved, and moving the regressions to their own pr makes sense. Make your commits and create the PRs, then do a handoff
