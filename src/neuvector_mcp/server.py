@@ -21,22 +21,29 @@ from .context import AppContext
 from .tools import (
     admission,
     compliance,
+    compliance_write,
+    dlp,
     events,
     iam_read,
     iam_write,
     inventory,
     policy_read,
     policy_write,
+    response_write,
+    ruleset_ops,
     runtime_ops,
     scan_ops,
+    service_ops,
+    sigstore,
     system,
     vulnerability,
+    vulnerability_write,
 )
 
 log = structlog.get_logger(__name__)
 
 SERVER_NAME = "neuvector"
-SERVER_VERSION = "1.0.4"
+SERVER_VERSION = "1.1.0"
 
 #: Every toolset module, in registration order. Each exposes
 #: ``register(mcp, settings)`` and is responsible for checking whether its own
@@ -55,6 +62,13 @@ TOOL_MODULES = (
     runtime_ops,
     iam_write,
     system,
+    vulnerability_write,
+    ruleset_ops,
+    dlp,
+    compliance_write,
+    response_write,
+    sigstore,
+    service_ops,
 )
 
 INSTRUCTIONS = """\

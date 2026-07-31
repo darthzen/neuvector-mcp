@@ -71,11 +71,12 @@ def register(mcp: FastMCP, settings: Settings) -> None:
     async def nv_trigger_scan(
         ctx: Context,
         target: Annotated[
-            Literal["workload", "host", "registry"],
+            Literal["workload", "host", "registry", "platform"],
             Field(
                 description="What to scan: 'workload' rescans one container's image, 'host' "
                 "rescans one node, 'registry' starts a full scan of every image a configured "
-                "registry matches."
+                "registry matches, 'platform' rescans the Kubernetes platform itself (there is "
+                "exactly one, so 'target_id' is ignored - pass 'platform')."
             ),
         ],
         target_id: Annotated[
@@ -116,12 +117,25 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         Calls POST /v1/scan/workload/{id} with target='workload'.
         Calls POST /v1/scan/host/{id} with target='host'.
         Calls POST /v1/scan/registry/{name}/scan with target='registry'.
+        Calls POST /v1/scan/platform/platform with target='platform'.
         """
         app = app_context(ctx)
-        # 1. build the payload: none of the three routes takes a request body.
-        if target == "registry":
+        # 1. build the payload: none of the four routes takes a request body.
+        if target == "platform":
+            # The platform is a singleton: the route is literally
+            # /v1/scan/platform/platform (apis.yaml 5.6.0), so target_id names
+            # nothing and is not interpolated. No read tool exposes the result
+            # yet - GET /v1/scan/platform is documented but unimplemented, and
+            # nv_get_scan_report has no 'platform' target.
+            path = "/v1/scan/platform/platform"
+            timeout_s: float | None = None
+            effect = (
+                "Rescan the Kubernetes platform itself for known control-plane "
+                "vulnerabilities. Nothing on the cluster is modified."
+            )
+        elif target == "registry":
             path = f"/v1/scan/registry/{target_id}/scan"
-            timeout_s: float | None = app.settings.long_request_timeout_s
+            timeout_s = app.settings.long_request_timeout_s
             effect = (
                 f"Start a full scan of registry {target_id!r}. Every matching repository and tag "
                 "will be scanned; this occupies shared scanner capacity until it completes."
