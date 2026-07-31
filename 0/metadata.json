@@ -42,6 +42,40 @@
     "output_tokens": 80148,
     "api_call_count": 80
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_017NGYRkgrXE8fZDFLAHXpRR",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "handoff"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2805fe8968f3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 489,
+        "end": 490,
+        "entry_ids": [
+          "7890786c-70ad-46bf-9212-03ef5d14d88a"
+        ],
+        "tool_use_id": "toolu_017NGYRkgrXE8fZDFLAHXpRR"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_017NGYRkgrXE8fZDFLAHXpRR"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: handoff",
+        "default_collapsed": true
+      }
+    }
+  ],
   "session_metrics": {
     "turn_count": 7
   },
