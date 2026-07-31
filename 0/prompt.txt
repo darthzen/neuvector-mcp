@@ -1,0 +1,5 @@
+pr merged. Can I just go manually delete the bad image?
+
+---
+
+go
