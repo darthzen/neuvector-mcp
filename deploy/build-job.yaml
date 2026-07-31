@@ -1,0 +1,53 @@
+# One-shot in-cluster build of neuvector-mcp 1.1.0.
+#
+# Runs on sdf1 (amd64) so no emulation is involved. The source is the public
+# GitHub repo at main, cloned by kaniko itself, so nothing is uploaded from the
+# laptop. The Harbor credentials are mounted straight from the existing
+# harbor-pull secret and are never handled outside the cluster.
+#
+# Namespace is 'ai' rather than 'neuvector-mcp' because the latter enforces
+# PodSecurity 'restricted', which kaniko cannot satisfy.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neuvector-mcp-build-1-1-0
+  namespace: ai
+  labels:
+    app: neuvector-mcp
+    role: build
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: neuvector-mcp
+        role: build
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: sdf1
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - --context=git://github.com/darthzen/neuvector-mcp.git#refs/heads/main
+            - --dockerfile=deploy/Dockerfile
+            - --destination=registry.ash4d.com/ash4d-lab/neuvector-mcp:1.1.0
+            - --verbosity=info
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: docker-config
+              mountPath: /kaniko/.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: harbor-pull
+            items:
+              - key: .dockerconfigjson
+                path: config.json
