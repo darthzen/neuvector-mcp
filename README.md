@@ -1,4 +1,6 @@
 # neuvector-mcp
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdarthzen%2Fneuvector-mcp.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdarthzen%2Fneuvector-mcp?ref=badge_shield)
+
 
 A Model Context Protocol server over the SUSE NeuVector container security
 control plane. It exposes NeuVector's inventory, vulnerability, compliance,
@@ -515,3 +517,9 @@ neuvector-mcp-spec/      the normative spec package this server was built from
 
 Full per-tool contracts are in `neuvector-mcp-spec/tools/`. The normative
 specification is `SPEC.md`.
+MCP server for the SUSE NeuVector container security platform. Built to the
+specification in `spec/SPEC.md`; `make verify` is the definition of done.
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdarthzen%2Fneuvector-mcp.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdarthzen%2Fneuvector-mcp?ref=badge_large)
