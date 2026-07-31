@@ -1144,7 +1144,13 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 "rules with nv_get_waf_sensor and send them back plus your changes.",
             ),
         ],
-        comment: Annotated[str, Field(description="Replacement comment. Empty clears it.")] = "",
+        comment: Annotated[
+            str | None,
+            Field(
+                description="Replacement comment. Omit to leave the existing comment "
+                "unchanged; pass an empty string to clear it."
+            ),
+        ] = None,
         confirm: Annotated[
             str | None,
             Field(description="Confirmation token from the plan returned by the first call."),
@@ -1157,21 +1163,29 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         detection it provided. Call nv_get_waf_sensor first and build the new list from
         what is actually there.
 
+        The comment is NOT replaced unless you pass one, because a sensor's comment is
+        often the only record of why it exists (which CVE it mitigates, who asked for
+        it). Pass comment="" to deliberately clear it.
+
         If the sensor is already bound to a Protect-mode group the new rules take effect
         on live traffic immediately - check bindings with nv_get_waf_sensor. Predefined
         sensors that ship with NeuVector cannot be updated.
 
-        Calls PATCH /v1/waf/sensor/{name} with {"config": {"name":..., "comment":..., "rules": [...]}}.
+        Calls PATCH /v1/waf/sensor/{name} with {"config": {"name":..., "rules": [...]}}.
         """
         # VERIFIED (live controller 5.4): 'rules' replaces the list wholesale.
+        # RESTWafSensorConfig.Comment is *string+omitempty (upstream apis.go), so an
+        # absent key means "leave unchanged" and "" means "clear". Sending the key
+        # unconditionally - as this tool used to - wiped the comment on every
+        # update that did not restate it.
         app = app_context(ctx)
-        payload: dict[str, Any] = {
-            "config": {
-                "name": sensor_name,
-                "comment": comment,
-                "rules": [_waf_rule_body(r) for r in rules],
-            }
+        config: dict[str, Any] = {
+            "name": sensor_name,
+            "rules": [_waf_rule_body(r) for r in rules],
         }
+        if comment is not None:
+            config["comment"] = comment
+        payload: dict[str, Any] = {"config": config}
         negatives = [f"{r.name}/{p.value}" for r in rules for p in r.patterns if p.op == "!regex"]
         plan = authorise_write(
             app.settings,
@@ -1279,12 +1293,13 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             ),
         ],
         status: Annotated[
-            bool,
+            bool | None,
             Field(
                 description="True enables WAF inspection for the group, False disables it "
-                "without changing the bindings."
+                "without changing the bindings. Omit to leave the current setting alone - "
+                "do not pass True unless you mean to turn inspection ON."
             ),
-        ] = True,
+        ] = None,
         confirm: Annotated[
             str | None,
             Field(description="Confirmation token from the plan returned by the first call."),
@@ -1307,14 +1322,18 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         # sets the whole list. The sibling 'delete' key takes bare NAME STRINGS, not
         # objects - sending objects there returns code 6 "Request in wrong format".
         # This tool uses 'replace' only, so an empty list is the way to unbind.
+        # RESTWafGroupConfig.Status is *bool+omitempty (upstream apis.go): absent means
+        # "leave unchanged". Defaulting it to True and always sending it - as this tool
+        # used to - silently re-enabled inspection on a group where it had been
+        # deliberately turned off, which starts denying traffic if the group is in Protect.
         app = app_context(ctx)
-        payload: dict[str, Any] = {
-            "config": {
-                "name": group_name,
-                "status": status,
-                "replace": [{"name": s.name, "action": s.action} for s in sensors],
-            }
+        config: dict[str, Any] = {
+            "name": group_name,
+            "replace": [{"name": s.name, "action": s.action} for s in sensors],
         }
+        if status is not None:
+            config["status"] = status
+        payload: dict[str, Any] = {"config": config}
         denying = [s.name for s in sensors if s.action == "deny"]
         binding_text = ", ".join(f"{s.name} ({s.action})" for s in sensors) if sensors else "none"
         plan = authorise_write(
@@ -1323,7 +1342,12 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             toolset="policy_write",
             target=group_name,
             effect=(
-                f"Set WAF inspection on group {group_name!r} to status={status} and REPLACE "
+                (
+                    f"Set WAF inspection on group {group_name!r} to status={status}"
+                    if status is not None
+                    else f"Leave WAF inspection on group {group_name!r} as it is"
+                )
+                + f" and REPLACE "
                 f"its sensor bindings with: {binding_text}. Any sensor currently bound and "
                 f"absent from this list is unbound and stops inspecting. "
                 + (
@@ -1349,7 +1373,9 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             operation="nv_set_waf_group",
             target=group_name,
             effect=(
-                f"WAF on group {group_name}: status={status}, bindings replaced with {binding_text}"
+                f"WAF on group {group_name}: "
+                + (f"status={status}, " if status is not None else "status unchanged, ")
+                + f"bindings replaced with {binding_text}"
             ),
             payload=payload,
             controller_response=response if isinstance(response, dict) else {},
