@@ -92,7 +92,7 @@ to start on `NV_TRANSPORT=http` without at least one bearer token in
 
 ```bash
 make image                                   # podman build, SUSE BCI base
-podman push localhost:5000/neuvector-mcp:1.0.3 <your-registry>/neuvector-mcp:1.0.3
+podman push localhost:5000/neuvector-mcp:1.0.4 <your-registry>/neuvector-mcp:1.0.4
 ```
 
 Override the tag or registry with `make image REGISTRY=<host> TAG=<tag>`.
@@ -113,7 +113,7 @@ kubectl exec <pod> -- sh -c 'BUILDKITD_FLAGS=--oci-worker-no-process-sandbox \
   buildctl-daemonless.sh build --frontend dockerfile.v0 \
     --local context=/workspace/src --local dockerfile=/workspace/src/deploy \
     --opt platform=linux/amd64 \
-    --output type=image,name=<registry>/neuvector-mcp:1.0.3,push=true'
+    --output type=image,name=<registry>/neuvector-mcp:1.0.4,push=true'
 ```
 
 `--oci-worker-no-process-sandbox` is required: without it every `RUN` step dies
