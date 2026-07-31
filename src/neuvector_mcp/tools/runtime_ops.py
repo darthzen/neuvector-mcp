@@ -31,7 +31,7 @@ from ..context import app_context
 from ..errors import GuardError, NotFoundError, UpstreamError, ValidationError_
 from ..guard import authorise_write
 from ..models import WriteOutcome, redact_secrets, service_namespace
-from ..modes import describe_drift, plan_mode_patches, read_service_modes
+from ..modes import pending_fields, read_service_modes, verify_applied
 
 #: Creates something, or starts an action, that did not exist before. Not
 #: destructive; not idempotent (a second call creates or starts again).
@@ -210,13 +210,13 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         dimensions are independent: policy_mode enforces network policy, profile_mode
         enforces process and file profiles, and a common safe sequence is network first,
         profile once process learning has settled. Get names from nv_list_services and
-        check each service's current modes there first. The controller only accepts a
-        move to an adjacent mode, so this tool reads the current mode, steps through
-        Monitor when it has to, and reads the result back rather than trusting the
-        controller's success status.
+        check each service's current modes there first. The controller applies this
+        change a moment after it acknowledges it, so this tool reads the services back
+        until they agree rather than trusting the success status, and tells you if the
+        change never took.
 
-        Calls GET /v1/service to read the current modes and to verify the result.
-        Calls PATCH /v1/service/config, once per rung it has to step through.
+        Calls GET /v1/service, to read the current modes and to verify the result.
+        Calls PATCH /v1/service/config, once, unless the services already match.
         """
         app = app_context(ctx)
         # sorted(): the batch has set semantics, and a stable order keeps the
@@ -269,12 +269,6 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 if profile_mode == "Protect"
                 else ""
             )
-            + (
-                " The controller refuses a two-rung move, so any service still in Discover "
-                "is stepped through Monitor first."
-                if "Protect" in (policy_mode, profile_mode)
-                else ""
-            )
         )
 
         plan = authorise_write(
@@ -298,8 +292,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 "nv_list_services and carry the namespace, e.g. 'api.prod'. Nothing was sent."
             )
 
-        bodies = plan_mode_patches(ordered, config, before)
-        if not bodies:
+        if not pending_fields(ordered, config, before):
             return WriteOutcome(
                 status="applied",
                 operation="nv_set_service_mode",
@@ -311,32 +304,23 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 payload=wire_payload,
             )
 
-        response: Any = None
-        for body in bodies:
-            response = await app.client.request("PATCH", _SERVICE_CONFIG_PATH, json=body)
+        response = await app.client.request("PATCH", _SERVICE_CONFIG_PATH, json=wire_payload)
 
         # A 200 from this endpoint is not evidence that anything moved, so the
         # outcome reports what the controller says afterwards, not what it accepted.
-        after = await read_service_modes(app.client, ordered)
-        drift = describe_drift(ordered, config, after)
+        drift = await verify_applied(app.client, ordered, config)
         if drift:
             raise UpstreamError(
-                "nv_set_service_mode sent "
-                f"{len(bodies)} request(s), all accepted, but the controller did not apply "
-                f"every value: {'; '.join(drift)}. The services are in the state shown there; "
-                "re-read them with nv_list_services before acting."
+                "nv_set_service_mode was accepted by the controller, but the change did not "
+                f"take: {'; '.join(drift)}. The services are in the state shown there; re-read "
+                "them with nv_list_services before acting."
             )
 
-        stepped = len(bodies) - 1
         return WriteOutcome(
             status="applied",
             operation="nv_set_service_mode",
             target=target,
-            effect=(
-                f"{settings_text} verified on {len(ordered)} service(s) after {len(bodies)} "
-                f"request(s)"
-                + (f", stepping through {stepped} intermediate mode(s)" if stepped else "")
-            ),
+            effect=f"{settings_text} applied to {len(ordered)} service(s) and verified",
             payload=wire_payload,
             controller_response=redact_secrets(response) if isinstance(response, dict) else {},
         )

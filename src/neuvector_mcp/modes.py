@@ -1,9 +1,8 @@
-"""Enforcement-mode transitions on ``PATCH /v1/service/config``.
+"""Enforcement-mode changes on ``PATCH /v1/service/config``.
 
-Three things about that endpoint are not in the published API documentation and
-were measured against a live 5.6.0 controller on 2026-07-31. Every one of them
-fails *silently* - the controller answers 200 and changes nothing - so a tool
-that trusts its own success status reports enforcement that is not there.
+Two things about that endpoint are not in the published API documentation. Both
+were measured against a live 5.6.0 controller, and getting them wrong is silent
+in both directions - the controller answers 200 either way.
 
 1. **The dimension is chosen by the payload field, not by the path.**
    ``RESTServiceBatchConfig`` carries five fields: ``services``, ``policy_mode``,
@@ -13,32 +12,33 @@ that trusts its own success status reports enforcement that is not there.
    is inert on every field; ``/v1/service/config/network`` honours only
    ``policy_mode``. This module therefore uses ``/v1/service/config`` alone.
 
-2. **Mode moves must be adjacent.** The ladder is Discover -> Monitor -> Protect
-   and the controller drops any two-rung jump. Going to Protect from Discover
-   means sending Monitor first, in a separate call.
+2. **The write is applied asynchronously.** A read issued immediately after the
+   200 can still show the old value. Measured lag on 2026-07-31: 0.33-0.59s over
+   five runs. :func:`verify_applied` polls across that window, because a single
+   read taken too early reports a change that succeeded as a failure.
 
-3. **A 200 is not evidence.** The only way to know a mode changed is to read the
-   service back afterwards, which is what :func:`read_service_modes` is for.
+An earlier revision of this module also stepped every mode change through
+``Monitor``, on the theory that the controller silently discards a two-rung move
+along ``Discover -> Monitor -> Protect``. That theory was wrong: it was point 2
+misread. Five consecutive single-call ``Discover -> Protect`` moves all landed,
+on both dimensions, including with the other dimension already at ``Protect``.
+The stepping is gone; the verification it was hiding behind is what actually
+mattered and has been kept.
 
-The pure functions here decide *what* to send; the callers in ``tools`` own the
-guard handshake and do the sending.
+The pure functions here decide what to send and what counts as landed; the
+callers in ``tools`` own the guard handshake and do the sending.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .client import NeuVectorClient, build_query
 
-#: The enforcement ladder, weakest rung first. Only adjacent moves are accepted.
-MODE_LADDER: tuple[str, ...] = ("Discover", "Monitor", "Protect")
-
-#: Fields of ``RESTServiceBatchConfig`` that carry a mode and so must be stepped.
-MODE_FIELDS: tuple[str, ...] = ("policy_mode", "profile_mode")
-
-#: Every settable field, mode and non-mode alike. Each one is also a field of
-#: ``RESTService``, which is what makes a read-back comparison possible.
+#: Every settable field of ``RESTServiceBatchConfig`` bar ``services``. Each one
+#: is also a field of ``RESTService``, which is what makes read-back possible.
 SERVICE_CONFIG_FIELDS: tuple[str, ...] = (
     "policy_mode",
     "profile_mode",
@@ -46,84 +46,35 @@ SERVICE_CONFIG_FIELDS: tuple[str, ...] = (
     "not_scored",
 )
 
-
-def mode_steps(current: str, target: str) -> list[str]:
-    """Rungs to send, in order, to move one service from ``current`` to ``target``.
-
-    Args:
-        current: Mode the controller reports today. An empty or unrecognised
-            value means "could not be read".
-        target: Mode the caller asked for; one of :data:`MODE_LADDER`.
-
-    Returns:
-        The ordered rungs, ending at ``target``. Empty when the service is
-        already there. Never contains a two-rung jump.
-    """
-    if current == target:
-        return []
-    stop = MODE_LADDER.index(target)
-    try:
-        start = MODE_LADDER.index(current)
-    except ValueError:
-        # The current rung is unknown, so no walk can be computed. Monitor is
-        # adjacent to both ends: reaching it first is legal from anywhere and is
-        # the only move that cannot be silently dropped.
-        return [target] if target == "Monitor" else ["Monitor", target]
-    step = 1 if stop > start else -1
-    return [MODE_LADDER[i] for i in range(start + step, stop + step, step)]
+#: Read-back budget, sized off the measured 0.33-0.59s propagation lag with room
+#: for a loaded controller. Module-level so tests can shrink them.
+VERIFY_ATTEMPTS = 8
+VERIFY_DELAY_S = 0.5
 
 
-def plan_mode_patches(
+def pending_fields(
     services: Sequence[str],
     config: Mapping[str, Any],
     observed: Mapping[str, Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    """Ordered ``PATCH /v1/service/config`` bodies that reach the state in ``config``.
-
-    The last body returned is ``config`` itself - the payload the confirm token
-    bound - and anything before it is an intermediate rung the controller insists
-    on. Services already at the requested rung contribute no intermediate step,
-    so re-applying Protect never dips through Monitor.
+) -> list[str]:
+    """Fields of ``config`` that ``observed`` does not already satisfy.
 
     Args:
-        services: Service names in the batch, already sorted.
+        services: Service names in the batch.
         config: The ``config`` object the caller asked for, ``services`` included.
         observed: Current field values per service, from :func:`read_service_modes`.
 
     Returns:
-        Zero or more request bodies of the form ``{"config": {...}}``. Empty when
-        every service already holds every value in ``config``, in which case
-        nothing at all should be sent.
+        One human-readable line per service-and-field still to change. Empty means
+        the request is a no-op and nothing need be sent.
     """
-    targets = {key: value for key, value in config.items() if key != "services"}
-    if all(
-        observed.get(service, {}).get(field) == value
+    return [
+        f"{service}.{field}: asked for {value!r}, controller reports "
+        f"{observed.get(service, {}).get(field)!r}"
         for service in services
-        for field, value in targets.items()
-    ):
-        return []
-
-    bodies: list[dict[str, Any]] = []
-    for field in MODE_FIELDS:
-        target = targets.get(field)
-        if target is None:
-            continue
-        walks = {
-            service: mode_steps(str(observed.get(service, {}).get(field, "") or ""), str(target))
-            for service in services
-        }
-        # Every rung except each service's last one; the last rungs are exactly
-        # what the caller's own payload sets, and it goes out at the end.
-        for index in range(max((len(walk) for walk in walks.values()), default=0) - 1):
-            batches: dict[str, list[str]] = {}
-            for service, walk in walks.items():
-                if index < len(walk) - 1:
-                    batches.setdefault(walk[index], []).append(service)
-            for value, members in sorted(batches.items()):
-                bodies.append({"config": {"services": sorted(members), field: value}})
-
-    bodies.append({"config": dict(config)})
-    return bodies
+        for field, value in sorted(config.items())
+        if field != "services" and observed.get(service, {}).get(field) != value
+    ]
 
 
 async def read_service_modes(
@@ -154,26 +105,29 @@ async def read_service_modes(
     return observed
 
 
-def describe_drift(
-    services: Sequence[str],
-    config: Mapping[str, Any],
-    observed: Mapping[str, Mapping[str, Any]],
+async def verify_applied(
+    client: NeuVectorClient, services: Sequence[str], config: Mapping[str, Any]
 ) -> list[str]:
-    """Fields the controller accepted but did not actually change.
+    """Poll the controller until it reflects ``config``, and report what never did.
+
+    A 200 from ``PATCH /v1/service/config`` is not evidence, and neither is one
+    read taken straight after it - the write lands a fraction of a second later.
+    Returning early on the first clean read keeps the common case fast.
 
     Args:
+        client: Controller client.
         services: Service names in the batch.
-        config: The ``config`` object that was asked for.
-        observed: Field values read back *after* the writes.
+        config: The ``config`` object that was sent.
 
     Returns:
-        One human-readable line per field that did not land, empty when the
-        controller's state matches what was asked for.
+        Empty when everything landed. Otherwise one line per field that did not,
+        naming the value the controller actually holds.
     """
-    return [
-        f"{service}.{field}: asked for {value!r}, controller reports "
-        f"{observed.get(service, {}).get(field)!r}"
-        for service in services
-        for field, value in sorted(config.items())
-        if field != "services" and observed.get(service, {}).get(field) != value
-    ]
+    drift: list[str] = []
+    for attempt in range(VERIFY_ATTEMPTS):
+        drift = pending_fields(services, config, await read_service_modes(client, services))
+        if not drift:
+            return []
+        if attempt + 1 < VERIFY_ATTEMPTS:
+            await asyncio.sleep(VERIFY_DELAY_S)
+    return drift

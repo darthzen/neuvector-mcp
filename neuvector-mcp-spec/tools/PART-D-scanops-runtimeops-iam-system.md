@@ -1296,15 +1296,28 @@ above. Appendix B omitted `profile_mode` until 2026-07-31; that omission is the
 whole reason the earlier `scope` argument existed, and `scope='profile'` was a
 silent no-op for the entire life of 1.1.0.
 
-**Stepwise transitions** — the controller accepts a mode move of only one rung
-along `Discover -> Monitor -> Protect`. A two-rung jump returns **200 and is
-discarded**. `neuvector_mcp/modes.py` owns this: after the guard, the tool reads
-each service's current modes with `GET /v1/service`, plans the walk with
-`plan_mode_patches()` (which always ends with the exact payload the confirm token
-bound), issues the `PATCH`es in order, then reads the services back and refuses to
-report `applied` if anything did not land. A service already at the requested mode
-contributes no intermediate step, so re-applying `Protect` never dips through
-`Monitor`.
+**The write is asynchronous, and 200 is not evidence.** The controller
+acknowledges a service-config `PATCH` before the change is readable. Measured lag
+on 2026-07-31: **0.33–0.59s** over five runs, and a `GET /v1/service` issued
+immediately after the 200 can still return the old value.
+
+`neuvector_mcp/modes.py` owns this: after the guard, the tool reads the current
+values with `GET /v1/service`, returns a no-op outcome if nothing would change,
+sends the single `PATCH` the confirm token bound, then calls `verify_applied()`,
+which re-reads until the controller agrees or a bounded budget
+(`VERIFY_ATTEMPTS` × `VERIFY_DELAY_S`, 8 × 0.5s) runs out. Only then does it
+report `applied`. A change that never lands raises `UpstreamError` naming the
+value the controller actually holds.
+
+> **Retracted: there is no stepwise-transition rule.** An earlier revision of
+> this section, and the memory it came from, held that the controller silently
+> discards a mode move of more than one rung and that `Discover -> Protect` must
+> be walked through `Monitor`. That was the asynchronous write misread as a
+> dropped one. Re-measured on 2026-07-31: five consecutive single-call
+> `Discover -> Protect` moves all landed, in 0.33–0.59s, on both dimensions, and
+> including with the other dimension already at `Protect`. The stepping code was
+> removed. **The read-back it was hiding behind is the part that mattered** — it
+> is what caught this, by failing a change that had in fact succeeded.
 
 **Docstring (use verbatim)**
 
@@ -1318,13 +1331,13 @@ moment you do it. Preview first and read the service list in the plan. The two
 dimensions are independent: policy_mode enforces network policy, profile_mode
 enforces process and file profiles, and a common safe sequence is network first,
 profile once process learning has settled. Get names from nv_list_services and
-check each service's current modes there first. The controller only accepts a
-move to an adjacent mode, so this tool reads the current mode, steps through
-Monitor when it has to, and reads the result back rather than trusting the
-controller's success status.
+check each service's current modes there first. The controller applies this
+change a moment after it acknowledges it, so this tool reads the services back
+until they agree rather than trusting the success status, and tells you if the
+change never took.
 
-Calls GET /v1/service to read the current modes and to verify the result.
-Calls PATCH /v1/service/config, once per rung it has to step through.
+Calls GET /v1/service, to read the current modes and to verify the result.
+Calls PATCH /v1/service/config, once, unless the services already match.
 ```
 
 **Body** — §7.4 shape, with the namespace pre-check of D.0.5 **before**
@@ -1338,9 +1351,6 @@ effect = (
        if policy_mode == "Protect" else "")
     + (" Process and file activity outside the learned profile will be blocked immediately."
        if profile_mode == "Protect" else "")
-    + (" The controller refuses a two-rung move, so any service still in Discover "
-       "is stepped through Monitor first."
-       if "Protect" in (policy_mode, profile_mode) else "")
 )
 ```
 
@@ -1349,17 +1359,19 @@ deliberately: `test_first_call_returns_plan_and_sends_nothing` in `test_guard.py
 keys on that phrase, and the two tools should read the same to an operator.
 
 **Fixture** — none. Tests use `conftest.FakeServices`, which serves
-`GET /v1/service` and applies `PATCH /v1/service/config` under the real
-controller's rule that a two-rung move is accepted and discarded. A plain
-`respond(200, json={})` mock cannot catch the bugs this tool exists to avoid.
+`GET /v1/service` and applies `PATCH /v1/service/config` with the controller's
+own read-after-write lag (`lag_reads=N` hides a committed write from the next N
+reads) and, with `apply_writes=False`, its habit of acknowledging a change it
+never makes. A plain `respond(200, json={})` mock cannot catch either.
 
 **Tests** `tests/test_runtime_ops.py`:
 `test_set_service_mode_preview_sends_nothing`,
 `test_set_service_mode_confirmed_applies_to_batch_endpoint`,
 `test_set_service_mode_profile_mode_selected_by_payload_field`,
-`test_set_service_mode_steps_through_monitor_to_protect`,
-`test_set_service_mode_steps_both_dimensions`,
-`test_set_service_mode_steps_only_the_services_that_need_it`,
+`test_set_service_mode_reaches_protect_from_discover_in_one_call`,
+`test_set_service_mode_sets_both_dimensions_in_one_call`,
+`test_set_service_mode_batches_mixed_starting_modes_in_one_call`,
+`test_set_service_mode_survives_the_controller_write_lag`,
 `test_set_service_mode_already_at_target_sends_no_write`,
 `test_set_service_mode_reports_a_silently_dropped_change`,
 `test_set_service_mode_unknown_service_writes_nothing`,

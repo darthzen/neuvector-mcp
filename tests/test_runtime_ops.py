@@ -151,7 +151,7 @@ async def test_set_service_mode_confirmed_applies_to_batch_endpoint(
     )
 
     assert body["status"] == "applied"
-    assert fake.writes.call_count == 1, "Discover -> Monitor is one rung; no stepping needed"
+    assert fake.writes.call_count == 1
     assert json.loads(fake.writes.calls.last.request.read()) == {
         "config": {
             "services": ["api.prod", "web.prod"],
@@ -182,21 +182,22 @@ async def test_set_service_mode_profile_mode_selected_by_payload_field(
     assert fake.mode("api.prod", "policy_mode") == "Discover", "the other dimension is untouched"
 
 
-async def test_set_service_mode_steps_through_monitor_to_protect(
+async def test_set_service_mode_reaches_protect_from_discover_in_one_call(
     client, nv_mock: respx.MockRouter
 ) -> None:
-    """Discover -> Protect direct is accepted and dropped, so it must be walked."""
+    """Measured on 5.6.0: a two-rung move lands. No stepping through Monitor."""
     fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}).install(nv_mock)
 
     body = await apply(client, {"services": ["api.prod"], "policy_mode": "Protect"})
 
-    assert [config["policy_mode"] for config in fake.patches] == ["Monitor", "Protect"]
+    assert fake.patches == [{"services": ["api.prod"], "policy_mode": "Protect"}]
     assert fake.mode("api.prod") == "Protect"
     assert "verified" in body["effect"]
-    assert "1 intermediate mode" in body["effect"]
 
 
-async def test_set_service_mode_steps_both_dimensions(client, nv_mock: respx.MockRouter) -> None:
+async def test_set_service_mode_sets_both_dimensions_in_one_call(
+    client, nv_mock: respx.MockRouter
+) -> None:
     fake = FakeServices(
         {"api.prod": {"policy_mode": "Discover", "profile_mode": "Monitor"}}
     ).install(nv_mock)
@@ -207,14 +208,13 @@ async def test_set_service_mode_steps_both_dimensions(client, nv_mock: respx.Moc
     )
 
     assert fake.patches == [
-        {"services": ["api.prod"], "policy_mode": "Monitor"},
-        {"services": ["api.prod"], "policy_mode": "Protect", "profile_mode": "Protect"},
-    ], "only the dimension that needs a rung gets one; the final payload carries both"
+        {"services": ["api.prod"], "policy_mode": "Protect", "profile_mode": "Protect"}
+    ]
     assert fake.mode("api.prod") == "Protect"
     assert fake.mode("api.prod", "profile_mode") == "Protect"
 
 
-async def test_set_service_mode_steps_only_the_services_that_need_it(
+async def test_set_service_mode_batches_mixed_starting_modes_in_one_call(
     client, nv_mock: respx.MockRouter
 ) -> None:
     fake = FakeServices(
@@ -230,11 +230,23 @@ async def test_set_service_mode_steps_only_the_services_that_need_it(
         {"services": ["web.prod", "api.prod", "db.prod"], "policy_mode": "Protect"},
     )
 
-    assert fake.patches[0] == {"services": ["api.prod"], "policy_mode": "Monitor"}, (
-        "web.prod is already adjacent and db.prod must not dip out of Protect"
-    )
-    assert len(fake.patches) == 2
+    assert fake.patches == [
+        {"services": ["api.prod", "db.prod", "web.prod"], "policy_mode": "Protect"}
+    ], "where each service started makes no difference to what is sent"
     assert all(fake.mode(name) == "Protect" for name in ("api.prod", "web.prod", "db.prod"))
+
+
+async def test_set_service_mode_survives_the_controller_write_lag(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """The controller acknowledges before the change is readable; that is not a failure."""
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}, lag_reads=3).install(nv_mock)
+
+    body = await apply(client, {"services": ["api.prod"], "policy_mode": "Protect"})
+
+    assert body["status"] == "applied"
+    assert fake.mode("api.prod") == "Protect"
+    assert fake.writes.call_count == 1, "the write is not retried, only the read"
 
 
 async def test_set_service_mode_already_at_target_sends_no_write(
@@ -270,7 +282,7 @@ async def test_set_service_mode_reports_a_silently_dropped_change(
             },
         )
 
-    assert "did not apply" in str(excinfo.value)
+    assert "did not take" in str(excinfo.value)
     assert "'Discover'" in str(excinfo.value), "the error names the state the service is really in"
     assert fake.writes.call_count == 1
 

@@ -33,7 +33,7 @@ from ..models import (
     WafSensorBindingInput,
     WriteOutcome,
 )
-from ..modes import describe_drift, plan_mode_patches, read_service_modes
+from ..modes import pending_fields, read_service_modes, verify_applied
 
 MUTATING = ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
@@ -178,12 +178,12 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         Policy mode lives on the service, not the group object: RESTGroupConfig
         has no policy_mode field and the controller answers 200 while dropping
         it. Only learned groups ('nv.<service>.<namespace>') carry a mode. The
-        controller also refuses a two-rung move, so this tool reads the current
-        mode, steps through Monitor when it has to, and reads the result back
-        instead of trusting the success status. This sets network policy only;
-        use nv_set_service_mode for process and file profile enforcement.
+        controller also applies the change a moment after acknowledging it, so this
+        tool reads the mode back until it agrees instead of trusting the success
+        status. This sets network policy only; use nv_set_service_mode for process
+        and file profile enforcement.
 
-        Calls GET /v1/service to read the current mode and to verify the result.
+        Calls GET /v1/service, to read the current mode and to verify the result.
         Calls PATCH /v1/service/config with {"config": {"services": [...],
         "policy_mode":...}}.
         """
@@ -227,8 +227,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 "are named 'nv.<service>.<namespace>'; check nv_list_services. Nothing was sent."
             )
 
-        bodies = plan_mode_patches([service], config, before)
-        if not bodies:
+        if not pending_fields([service], config, before):
             return WriteOutcome(
                 status="applied",
                 operation="nv_set_group_policy_mode",
@@ -240,29 +239,24 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 payload=payload,
             )
 
-        response: Any = None
-        for body in bodies:
-            response = await app.client.request("PATCH", "/v1/service/config", json=body)
+        was = str(before[service].get("policy_mode") or "unknown")
+        response = await app.client.request("PATCH", "/v1/service/config", json=payload)
 
-        # The controller answers 200 to a move it silently drops, so the mode is
-        # read back before this reports success.
-        drift = describe_drift([service], config, await read_service_modes(app.client, [service]))
+        # The controller applies this a moment after acknowledging it, so the mode
+        # is read back - with a budget for that lag - before this reports success.
+        drift = await verify_applied(app.client, [service], config)
         if drift:
             raise UpstreamError(
-                f"nv_set_group_policy_mode sent {len(bodies)} request(s), all accepted, but "
-                f"the controller did not apply the change: {'; '.join(drift)}. Re-read the "
-                "service with nv_list_services before acting."
+                "nv_set_group_policy_mode was accepted by the controller, but the change did "
+                f"not take: {'; '.join(drift)}. Re-read the service with nv_list_services "
+                "before acting."
             )
 
-        walked = " -> ".join(
-            [str(before[service].get("policy_mode") or "unknown")]
-            + [str(body["config"]["policy_mode"]) for body in bodies]
-        )
         return WriteOutcome(
             status="applied",
             operation="nv_set_group_policy_mode",
             target=group_name,
-            effect=f"policy_mode of service {service!r} ({group_name}) verified: {walked}",
+            effect=f"policy_mode of service {service!r} ({group_name}) verified: {was} -> {mode}",
             payload=payload,
             controller_response=response if isinstance(response, dict) else {},
         )
