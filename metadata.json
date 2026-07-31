@@ -4,24 +4,21 @@
   "strategy": "manual-commit",
   "branch": "fix/waf-omitempty-fields",
   "checkpoints_count": 7,
-  "files_touched": [
-    "src/neuvector_mcp/tools/policy_write.py",
-    "tests/test_policy_write.py"
-  ],
+  "files_touched": null,
   "sessions": [
     {
       "metadata": "/0/metadata.json",
       "transcript": "/0/full.jsonl",
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
-      "prompt": "/0/prompt.txt"
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 2387,
-    "cache_creation_tokens": 617598,
-    "cache_read_tokens": 12007160,
-    "output_tokens": 81780,
-    "api_call_count": 83
+    "input_tokens": 19,
+    "cache_creation_tokens": 9754,
+    "cache_read_tokens": 2398950,
+    "output_tokens": 6687,
+    "api_call_count": 10
   }
 }
