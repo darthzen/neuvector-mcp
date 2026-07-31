@@ -30,6 +30,19 @@ RULE_BATCH_PATH = "/v1/policy/rule"
 PROCESS_PATH = f"/v1/process_profile/{LEARNED_GROUP}"
 FILE_MONITOR_PATH = f"/v1/file_monitor/{LEARNED_GROUP}"
 
+WAF_SENSOR = "sensor.mcp-hardening"
+WAF_SENSOR_PATH = "/v1/waf/sensor"
+WAF_GROUP_PATH = "/v1/waf/group"
+
+WAF_RULE = {
+    "name": "rule.jsonrpc",
+    "patterns": [{"value": "\\$\\{jndi:", "context": "header", "op": "regex"}],
+}
+WAF_RULE_NEGATIVE = {
+    "name": "rule.host-allowlist",
+    "patterns": [{"value": "^allowed\\.example$", "context": "header", "op": "!regex"}],
+}
+
 DOMAIN_CRITERION = {"key": "domain", "value": "payments", "op": "="}
 LABEL_CRITERION = {"key": "label", "value": "tier=web", "op": "="}
 
@@ -597,6 +610,209 @@ async def test_update_file_monitor_profile_rejects_empty_change_set(
     assert route.call_count == 0
 
 
+# -- nv_create_waf_sensor -------------------------------------------------------
+
+
+async def test_create_waf_sensor_preview_sends_nothing(client, nv_mock: respx.MockRouter) -> None:
+    route = nv_mock.post(WAF_SENSOR_PATH).respond(200, json={})
+    result = await client.call_tool(
+        "nv_create_waf_sensor",
+        {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE], "comment": "mcp hardening"},
+    )
+    body = result.structured_content
+    assert body["status"] == "confirmation_required"
+    assert len(body["confirm_token"]) == 12
+    assert "inspects nothing until" in body["effect"]
+    assert route.call_count == 0, "the guard must not touch the controller"
+
+
+async def test_create_waf_sensor_confirmed_sends_config_body(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.post(WAF_SENSOR_PATH).respond(200, json={})
+    result = await _confirmed(
+        client,
+        "nv_create_waf_sensor",
+        {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE], "comment": "mcp hardening"},
+    )
+
+    assert result.structured_content["status"] == "applied"
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.read()) == {
+        "config": {
+            "name": WAF_SENSOR,
+            "comment": "mcp hardening",
+            "cfg_type": "user_created",
+            "rules": [
+                {
+                    "name": "rule.jsonrpc",
+                    "patterns": [
+                        {
+                            "key": "pattern",
+                            "op": "regex",
+                            "value": "\\$\\{jndi:",
+                            "context": "header",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+
+async def test_create_waf_sensor_preview_warns_about_negative_regex(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    # '!regex' fires on every request that does NOT match. Getting it backwards
+    # takes out all legitimate traffic, so the plan has to say so out loud.
+    nv_mock.post(WAF_SENSOR_PATH).respond(200, json={})
+    result = await client.call_tool(
+        "nv_create_waf_sensor",
+        {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE_NEGATIVE]},
+    )
+    effect = result.structured_content["effect"]
+    assert "CAUTION" in effect
+    assert "!regex" in effect
+
+
+async def test_create_waf_sensor_preview_states_no_negatives(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    nv_mock.post(WAF_SENSOR_PATH).respond(200, json={})
+    result = await client.call_tool(
+        "nv_create_waf_sensor", {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE]}
+    )
+    assert "All patterns are positive matches." in result.structured_content["effect"]
+
+
+# -- nv_update_waf_sensor -------------------------------------------------------
+
+
+async def test_update_waf_sensor_preview_warns_it_replaces(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.patch(f"{WAF_SENSOR_PATH}/{WAF_SENSOR}").respond(200, json={})
+    result = await client.call_tool(
+        "nv_update_waf_sensor", {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE]}
+    )
+    effect = result.structured_content["effect"]
+    assert "REPLACE every rule" in effect
+    assert "is deleted and stops detecting" in effect
+    assert route.call_count == 0
+
+
+async def test_update_waf_sensor_confirmed_sends_config_body(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.patch(f"{WAF_SENSOR_PATH}/{WAF_SENSOR}").respond(200, json={})
+    result = await _confirmed(
+        client,
+        "nv_update_waf_sensor",
+        {"sensor_name": WAF_SENSOR, "rules": [WAF_RULE], "comment": "updated"},
+    )
+
+    assert result.structured_content["status"] == "applied"
+    assert route.calls.last.request.method == "PATCH"
+    assert json.loads(route.calls.last.request.read()) == {
+        "config": {
+            "name": WAF_SENSOR,
+            "comment": "updated",
+            "rules": [
+                {
+                    "name": "rule.jsonrpc",
+                    "patterns": [
+                        {
+                            "key": "pattern",
+                            "op": "regex",
+                            "value": "\\$\\{jndi:",
+                            "context": "header",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+
+# -- nv_delete_waf_sensor -------------------------------------------------------
+
+
+async def test_delete_waf_sensor_preview_sends_nothing(client, nv_mock: respx.MockRouter) -> None:
+    route = nv_mock.delete(f"{WAF_SENSOR_PATH}/{WAF_SENSOR}").respond(200, json={})
+    result = await client.call_tool("nv_delete_waf_sensor", {"sensor_name": WAF_SENSOR})
+    assert result.structured_content["status"] == "confirmation_required"
+    assert "silently" in result.structured_content["effect"]
+    assert route.call_count == 0
+
+
+async def test_delete_waf_sensor_confirmed_calls_delete(client, nv_mock: respx.MockRouter) -> None:
+    route = nv_mock.delete(f"{WAF_SENSOR_PATH}/{WAF_SENSOR}").respond(200, json={})
+    result = await _confirmed(client, "nv_delete_waf_sensor", {"sensor_name": WAF_SENSOR})
+    assert result.structured_content["status"] == "applied"
+    assert route.call_count == 1
+    assert route.calls.last.request.method == "DELETE"
+
+
+# -- nv_set_waf_group -----------------------------------------------------------
+
+
+async def test_set_waf_group_preview_warns_about_replace_and_protect(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.patch(f"{WAF_GROUP_PATH}/{LEARNED_GROUP}").respond(200, json={})
+    result = await client.call_tool(
+        "nv_set_waf_group",
+        {"group_name": LEARNED_GROUP, "sensors": [{"name": WAF_SENSOR, "action": "deny"}]},
+    )
+    effect = result.structured_content["effect"]
+    assert "REPLACE" in effect
+    assert "is unbound and stops inspecting" in effect
+    assert "will DENY matching requests if the group is moved to Protect" in effect
+    assert route.call_count == 0
+
+
+async def test_set_waf_group_confirmed_sends_replace_body(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.patch(f"{WAF_GROUP_PATH}/{LEARNED_GROUP}").respond(200, json={})
+    result = await _confirmed(
+        client,
+        "nv_set_waf_group",
+        {"group_name": LEARNED_GROUP, "sensors": [{"name": WAF_SENSOR, "action": "deny"}]},
+    )
+
+    assert result.structured_content["status"] == "applied"
+    # 'replace' takes {name, action} objects. The sibling 'delete' key takes bare
+    # name strings; sending objects there returns code 6.
+    assert json.loads(route.calls.last.request.read()) == {
+        "config": {
+            "name": LEARNED_GROUP,
+            "status": True,
+            "replace": [{"name": WAF_SENSOR, "action": "deny"}],
+        }
+    }
+
+
+async def test_set_waf_group_empty_list_unbinds_everything(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.patch(f"{WAF_GROUP_PATH}/{LEARNED_GROUP}").respond(200, json={})
+    await _confirmed(client, "nv_set_waf_group", {"group_name": LEARNED_GROUP, "sensors": []})
+    assert json.loads(route.calls.last.request.read())["config"]["replace"] == []
+
+
+async def test_set_waf_group_respects_allowed_namespaces(nv_mock: respx.MockRouter) -> None:
+    # LEARNED_GROUP is nv.api.prod, so the namespace is 'prod'.
+    server = build_server(make_settings(allowed_namespaces=("staging",)))
+    async with Client(server) as c:
+        with pytest.raises(Exception) as excinfo:
+            await c.call_tool(
+                "nv_set_waf_group",
+                {"group_name": LEARNED_GROUP, "sensors": []},
+            )
+    assert "prod" in str(excinfo.value)
+
+
 # -- registration ---------------------------------------------------------------
 
 
@@ -612,5 +828,9 @@ async def test_policy_write_tools_hidden_when_read_only(nv_mock: respx.MockRoute
         "nv_delete_network_rule",
         "nv_update_process_profile",
         "nv_update_file_monitor_profile",
+        "nv_create_waf_sensor",
+        "nv_update_waf_sensor",
+        "nv_delete_waf_sensor",
+        "nv_set_waf_group",
     ):
         assert tool not in names, f"{tool} must be hidden when NV_READ_ONLY=true"

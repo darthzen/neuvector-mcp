@@ -281,9 +281,9 @@ mutating toolset fails rule R3.
 | `vulnerability` | read | on | image/workload/host scan reports, registries, scanners, vulnerability profiles |
 | `compliance` | read | on | workload/host compliance, CIS bench reports, compliance profiles |
 | `events` | read | on | threats, violations, incidents, audits, system events, alerts |
-| `policy_read` | read | on | network rules, process/file profiles, DLP/WAF sensors, response rules, admission state and rules, admission rule assessment |
+| `policy_read` | read | on | network rules, process/file profiles, DLP sensors, WAF sensors/groups/rules, response rules, admission state and rules, admission rule assessment |
 | `iam_read` | read | on | users, roles, auth servers, API keys (metadata only) |
-| `policy_write` | write | **off** | create/update/delete groups, network rules, process and file-monitor profiles |
+| `policy_write` | write | **off** | create/update/delete groups, network rules, process and file-monitor profiles, WAF sensors and group bindings |
 | `admission` | write | **off** | admission control state and rules |
 | `scan_ops` | write | **off** | trigger/stop scans, registry CRUD, repository scan, bench runs |
 | `runtime_ops` | write | **off** | quarantine, service mode changes, packet capture |
@@ -486,9 +486,9 @@ Complete contracts, argument by argument, are in `TOOLS.md`. Summary:
 | `vulnerability` | `nv_list_image_scan_summaries`, `nv_get_scan_report`, `nv_get_scan_status`, `nv_list_scanners`, `nv_list_registries`, `nv_list_registry_images`, `nv_get_vulnerability_profile` | 7 |
 | `compliance` | `nv_get_compliance_findings`, `nv_get_bench_report`, `nv_list_compliance_profiles`, `nv_get_compliance_profile` | 4 |
 | `events` | `nv_query_security_events`, `nv_get_threat_detail`, `nv_query_audit_events`, `nv_query_system_events`, `nv_get_system_alerts` | 5 |
-| `policy_read` | `nv_list_network_rules`, `nv_get_network_rule`, `nv_get_process_profile`, `nv_get_file_monitor_profile`, `nv_list_response_rules`, `nv_list_dlp_sensors`, `nv_list_waf_sensors`, `nv_get_admission_state`, `nv_list_admission_rules`, `nv_assess_admission_rule` | 10 |
+| `policy_read` | `nv_list_network_rules`, `nv_get_network_rule`, `nv_get_process_profile`, `nv_get_file_monitor_profile`, `nv_list_response_rules`, `nv_list_dlp_sensors`, `nv_list_waf_sensors`, `nv_get_waf_sensor`, `nv_list_waf_groups`, `nv_get_waf_group`, `nv_list_waf_rules`, `nv_get_admission_state`, `nv_list_admission_rules`, `nv_assess_admission_rule` | 14 |
 | `iam_read` | `nv_list_users`, `nv_list_roles`, `nv_list_auth_servers`, `nv_list_api_keys` | 4 |
-| `policy_write` | `nv_create_group`, `nv_update_group_criteria`, `nv_delete_group`, `nv_set_group_policy_mode`, `nv_apply_network_rule_changes`, `nv_delete_network_rule`, `nv_update_process_profile`, `nv_update_file_monitor_profile` | 8 |
+| `policy_write` | `nv_create_group`, `nv_update_group_criteria`, `nv_delete_group`, `nv_set_group_policy_mode`, `nv_apply_network_rule_changes`, `nv_delete_network_rule`, `nv_update_process_profile`, `nv_update_file_monitor_profile`, `nv_create_waf_sensor`, `nv_update_waf_sensor`, `nv_delete_waf_sensor`, `nv_set_waf_group` | 12 |
 | `admission` | `nv_set_admission_state`, `nv_create_admission_rule`, `nv_update_admission_rule`, `nv_delete_admission_rule` | 4 |
 | `scan_ops` | `nv_trigger_scan`, `nv_stop_registry_scan`, `nv_scan_repository`, `nv_create_registry`, `nv_update_registry`, `nv_delete_registry`, `nv_trigger_bench_run` | 7 |
 | `runtime_ops` | `nv_quarantine_workload`, `nv_set_service_mode`, `nv_start_packet_capture`, `nv_stop_packet_capture` | 4 |

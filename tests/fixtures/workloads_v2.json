@@ -1,5 +1,106 @@
-{"workloads":[
- {"id":"a1b2c3d4e5f6","name":"api-7d9f8-abcde","domain":"prod","service":"api.prod","image":"registry.local/api:1.4.2","state":"protect","policy_mode":"Protect","high":2,"medium":11,"host_name":"khyron","running":true},
- {"id":"f6e5d4c3b2a1","name":"worker-55c6b-zzzzz","domain":"prod","service":"worker.prod","image":"registry.local/worker:0.9.0","state":"monitor","policy_mode":"Monitor","high":0,"medium":3,"host_name":"khyron","running":true},
- {"id":"0123456789ab","name":"redis-0","domain":"staging","service":"redis.staging","image":"docker.io/redis:7.2","state":"discover","policy_mode":"Discover","high":1,"medium":0,"host_name":"khyron","running":true}
+{"workloads": [
+  {
+    "brief": {
+      "author": "",
+      "display_name": "api-7d9f8-abcde",
+      "domain": "prod",
+      "host_id": "khyron:03c00218-044d-0538-5806-8d0700080009",
+      "host_name": "khyron",
+      "id": "a1b2c3d4e5f6",
+      "image": "registry.local/api:1.4.2",
+      "image_created_at": "2026-06-01T10:00:00Z",
+      "image_digest": "sha256:aaaa000000000000000000000000000000000000000000000000000000000000",
+      "image_id": "bbbb111111111111111111111111111111111111111111111111111111111111",
+      "image_reg_scanned": true,
+      "image_repo_digests": null,
+      "name": "k8s_POD_api-7d9f8-abcde_prod_11111111-2222-3333-4444-555555555555_1",
+      "service": "api.prod",
+      "service_group": "nv.api.prod",
+      "state": "protect"
+    },
+    "children": [],
+    "created_at": "2026-07-20T18:48:17Z",
+    "enforcer_id": "cccc222222222222222222222222222222222222222222222222222222222222",
+    "enforcer_name": "neuvector-enforcer-pod-aaaaa",
+    "exit_code": 0,
+    "finished_at": "",
+    "platform_role": "",
+    "rt_attributes": {
+      "applications": [],
+      "labels": {"app": "api"},
+      "memory_limit": 0,
+      "pod_name": "api-7d9f8-abcde",
+      "ports": [],
+      "privileged": false,
+      "run_as_root": false,
+      "service_account": "api"
+    },
+    "running": true,
+    "secured_at": "2026-07-20T18:48:17Z",
+    "security": {
+      "baseline_profile": "zero-drift",
+      "cap_change_mode": true,
+      "cap_quarantine": true,
+      "cap_sniff": true,
+      "policy_mode": "Protect",
+      "profile_mode": "Protect",
+      "scan_summary": {
+        "base_os": "alpine:3.20",
+        "critical": 0,
+        "cvedb_create_time": "2026-07-28T20:47:59Z",
+        "high": 2,
+        "medium": 11,
+        "result": "succeeded",
+        "scanned_at": "2026-07-31T01:48:51Z",
+        "scanner_version": "4.238",
+        "status": "finished"
+      },
+      "service_mesh": false,
+      "service_mesh_sidecar": false
+    },
+    "started_at": "2026-07-20T18:48:17Z"
+  },
+  {
+    "brief": {
+      "display_name": "worker-55c6b-zzzzz",
+      "domain": "prod",
+      "host_name": "khyron",
+      "id": "f6e5d4c3b2a1",
+      "image": "registry.local/worker:0.9.0",
+      "name": "k8s_POD_worker-55c6b-zzzzz_prod_66666666-7777-8888-9999-000000000000_1",
+      "service": "worker.prod",
+      "service_group": "nv.worker.prod",
+      "state": "monitor"
+    },
+    "children": [],
+    "running": true,
+    "security": {
+      "baseline_profile": "basic",
+      "policy_mode": "Monitor",
+      "profile_mode": "Monitor",
+      "scan_summary": {"critical": 0, "high": 0, "medium": 3, "result": "succeeded", "status": "finished"}
+    }
+  },
+  {
+    "brief": {
+      "display_name": "redis-0",
+      "domain": "staging",
+      "host_name": "khyron",
+      "id": "0123456789ab",
+      "image": "docker.io/redis:7.2",
+      "name": "k8s_POD_redis-0_staging_abcdabcd-1234-1234-1234-abcdabcdabcd_3",
+      "service": "redis.staging",
+      "service_group": "nv.redis.staging",
+      "state": "exit"
+    },
+    "children": [],
+    "exit_code": 0,
+    "finished_at": "2026-07-30T21:27:11Z",
+    "running": false,
+    "security": {
+      "policy_mode": "Discover",
+      "profile_mode": "Discover",
+      "scan_summary": {"critical": 0, "high": 0, "medium": 0, "result": "", "status": ""}
+    }
+  }
 ]}

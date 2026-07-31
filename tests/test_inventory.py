@@ -44,6 +44,64 @@ async def test_list_workloads_projects_and_pages(client, nv_mock: respx.MockRout
     assert result.data.workloads[0].policy_mode == "Protect"
 
 
+async def test_list_workloads_projects_nested_v2_sections(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """v2 splits a workload across ``brief``, ``security`` and a top-level ``running``.
+
+    Regression guard: reading identity from the item root yielded rows whose every
+    string field was empty while ``running`` alone populated, because ``running`` is
+    the only projected field that genuinely lives at the top level.
+    """
+    nv_mock.get("/v2/workload").respond(200, json=fixture("workloads_v2"))
+    result = await client.call_tool("nv_list_workloads", {"limit": 3})
+
+    first = result.data.workloads[0]
+    assert first.id == "a1b2c3d4e5f6"  # brief.id
+    assert first.namespace == "prod"  # brief.domain
+    assert first.service == "api.prod"  # brief.service
+    assert first.image == "registry.local/api:1.4.2"  # brief.image
+    assert first.state == "protect"  # brief.state
+    assert first.host_name == "khyron"  # brief.host_name
+    assert first.policy_mode == "Protect"  # security.policy_mode
+    assert first.high_vuls == 2  # security.scan_summary.high
+    assert first.med_vuls == 11  # security.scan_summary.medium
+    assert first.running is True  # item root
+
+    exited = result.data.workloads[2]
+    assert exited.running is False
+    assert exited.state == "exit"
+    assert (exited.high_vuls, exited.med_vuls) == (0, 0)
+
+
+async def test_list_workloads_projects_flat_payload(client, nv_mock: respx.MockRouter) -> None:
+    """Flat payloads keep every field at the item root; each section falls back to it."""
+    nv_mock.get("/v2/workload").respond(200, json=fixture("workloads_flat"))
+    result = await client.call_tool("nv_list_workloads", {"limit": 3})
+
+    first = result.data.workloads[0]
+    assert first.id == "a1b2c3d4e5f6"
+    assert first.name == "api-7d9f8-abcde"
+    assert first.namespace == "prod"
+    assert first.policy_mode == "Protect"
+    assert (first.high_vuls, first.med_vuls) == (2, 11)
+    assert first.running is True
+
+
+async def test_get_workload_projects_nested_sections(client, nv_mock: respx.MockRouter) -> None:
+    """GET /v2/workload/{id} returns the same nested item under a ``workload`` key."""
+    item = fixture("workloads_v2")["workloads"][0]
+    nv_mock.get("/v2/workload/a1b2c3d4e5f6").respond(200, json={"workload": item})
+
+    result = await client.call_tool("nv_get_workload", {"workload_id": "a1b2c3d4e5f6"})
+
+    assert result.data.id == "a1b2c3d4e5f6"
+    assert result.data.namespace == "prod"
+    assert result.data.policy_mode == "Protect"
+    assert result.data.high_vuls == 2
+    assert result.data.running is True
+
+
 async def test_name_prefix_uses_prefix_operator(client, nv_mock: respx.MockRouter) -> None:
     route = nv_mock.get("/v2/workload").respond(200, json={"workloads": []})
     await client.call_tool("nv_list_workloads", {"name_prefix": "api-"})

@@ -29,6 +29,8 @@ from ..models import (
     GroupCriterionInput,
     NetworkRuleInput,
     ProcessProfileEntryInput,
+    WafRuleInput,
+    WafSensorBindingInput,
     WriteOutcome,
 )
 
@@ -103,6 +105,29 @@ def _process_entry_body(entry: ProcessProfileEntryInput, group_name: str) -> dic
         "action": entry.action,
         "group": group_name,
     }
+
+
+def _waf_rule_body(rule: WafRuleInput) -> dict[str, Any]:
+    """Render one WAF rule request object.
+
+    Field names were confirmed by writing to a live controller and reading the
+    sensor back unchanged; Appendix B documents no WAF config schema. ``key`` is
+    always the literal ``"pattern"`` - the controller emits nothing else for WAF.
+    """
+    return {
+        "name": rule.name,
+        "patterns": [
+            {"key": "pattern", "op": p.op, "value": p.value, "context": p.context}
+            for p in rule.patterns
+        ],
+    }
+
+
+def _describe_waf_rules(rules: list[WafRuleInput]) -> str:
+    """One-line human summary of a rule list, for the confirmation plan."""
+    return "; ".join(
+        f"{r.name} [{', '.join(f'{p.op} on {p.context}' for p in r.patterns)}]" for r in rules
+    )
 
 
 def _file_filter_body(item: FileMonitorFilterInput, group_name: str) -> dict[str, Any]:
@@ -996,6 +1021,335 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 f"file-monitor profile of {group_name} updated: {len(add_filters)} added, "
                 f"{len(update_filters)} updated, {len(delete_filters)} deleted"
                 + (f"; blocking filters: {', '.join(blocking)}" if blocking else "")
+            ),
+            payload=payload,
+            controller_response=response if isinstance(response, dict) else {},
+        )
+
+    @mcp.tool(
+        name="nv_create_waf_sensor",
+        annotations=MUTATING_CREATE,
+        tags={"policy_write", "write"},
+    )
+    async def nv_create_waf_sensor(
+        ctx: Context,
+        sensor_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Name for the new sensor. NeuVector's own sensors use a 'sensor.' "
+                "prefix; a duplicate name is rejected by the controller.",
+            ),
+        ],
+        rules: Annotated[
+            list[WafRuleInput],
+            Field(
+                min_length=1,
+                description="Rules the sensor carries. Rules are ORed - a request matching ANY "
+                "rule fires the sensor. Patterns within one rule are ANDed.",
+            ),
+        ],
+        comment: Annotated[
+            str, Field(description="Why this sensor exists. Shown in the NeuVector UI.")
+        ] = "",
+        confirm: Annotated[
+            str | None,
+            Field(
+                description="Confirmation token from the plan returned by the first call. "
+                "Omit on the first call to preview the change."
+            ),
+        ] = None,
+    ) -> WriteOutcome:
+        """Create a WAF sensor: a named bundle of regexes matched against requests.
+
+        Creating a sensor changes NOTHING on its own. It inspects traffic only once
+        nv_set_waf_group binds it to a group, and it BLOCKS only when that group is in
+        Protect mode - in Discover or Monitor a match raises a threat event and the
+        request proceeds. Test a new sensor against a Monitor-mode group first.
+
+        Two regex cautions. An 'op' of '!regex' fires when the expression does NOT
+        match, which is how allowlists are written and is very easy to get backwards -
+        an over-narrow '!regex' fires on every legitimate request. And the enforcer
+        runs these on live traffic, so an expression that backtracks catastrophically
+        costs real latency.
+
+        Calls POST /v1/waf/sensor with {"config": {"name":..., "comment":..., "cfg_type": "user_created", "rules": [{"name","patterns":[{"key","op","value","context"}]}]}}.
+        """
+        # VERIFIED (live controller 5.4): this body shape round-trips unchanged.
+        # Appendix A claims RESTDlpSensorConfigData for this route and Appendix B
+        # documents neither type, so behaviour is the only source of truth here.
+        app = app_context(ctx)
+        payload: dict[str, Any] = {
+            "config": {
+                "name": sensor_name,
+                "comment": comment,
+                "cfg_type": "user_created",
+                "rules": [_waf_rule_body(r) for r in rules],
+            }
+        }
+        negatives = [f"{r.name}/{p.value}" for r in rules for p in r.patterns if p.op == "!regex"]
+        plan = authorise_write(
+            app.settings,
+            operation="nv_create_waf_sensor",
+            toolset="policy_write",
+            target=sensor_name,
+            effect=(
+                f"Create WAF sensor {sensor_name!r} with {len(rules)} rule(s): "
+                f"{_describe_waf_rules(rules)}. The sensor is bound to no group, so it "
+                f"inspects nothing until nv_set_waf_group binds it, and blocks nothing "
+                f"until that group is in Protect mode. "
+                + (
+                    f"CAUTION: {len(negatives)} pattern(s) use '!regex' and therefore fire on "
+                    f"every request that does NOT match ({', '.join(negatives)}). Verify the "
+                    f"expression covers all legitimate traffic before binding."
+                    if negatives
+                    else "All patterns are positive matches."
+                )
+            ),
+            payload=payload,
+            confirm=confirm,
+        )
+        if plan is not None:
+            return plan
+
+        response = await app.client.request("POST", "/v1/waf/sensor", json=payload)
+        return WriteOutcome(
+            status="applied",
+            operation="nv_create_waf_sensor",
+            target=sensor_name,
+            effect=(
+                f"WAF sensor {sensor_name} created with {len(rules)} rule(s); "
+                f"not yet bound to any group"
+            ),
+            payload=payload,
+            controller_response=response if isinstance(response, dict) else {},
+        )
+
+    @mcp.tool(
+        name="nv_update_waf_sensor",
+        annotations=MUTATING,
+        tags={"policy_write", "write"},
+    )
+    async def nv_update_waf_sensor(
+        ctx: Context,
+        sensor_name: Annotated[
+            str, Field(min_length=1, description="Sensor to update. It must already exist.")
+        ],
+        rules: Annotated[
+            list[WafRuleInput],
+            Field(
+                min_length=1,
+                description="The COMPLETE rule list after the update. This REPLACES the "
+                "sensor's rules; any existing rule you omit is deleted. Read the current "
+                "rules with nv_get_waf_sensor and send them back plus your changes.",
+            ),
+        ],
+        comment: Annotated[str, Field(description="Replacement comment. Empty clears it.")] = "",
+        confirm: Annotated[
+            str | None,
+            Field(description="Confirmation token from the plan returned by the first call."),
+        ] = None,
+    ) -> WriteOutcome:
+        """Replace a WAF sensor's rules.
+
+        This is a REPLACE, not a merge: the rule list you send becomes the sensor's
+        entire rule list, and anything omitted is silently dropped along with the
+        detection it provided. Call nv_get_waf_sensor first and build the new list from
+        what is actually there.
+
+        If the sensor is already bound to a Protect-mode group the new rules take effect
+        on live traffic immediately - check bindings with nv_get_waf_sensor. Predefined
+        sensors that ship with NeuVector cannot be updated.
+
+        Calls PATCH /v1/waf/sensor/{name} with {"config": {"name":..., "comment":..., "rules": [...]}}.
+        """
+        # VERIFIED (live controller 5.4): 'rules' replaces the list wholesale.
+        app = app_context(ctx)
+        payload: dict[str, Any] = {
+            "config": {
+                "name": sensor_name,
+                "comment": comment,
+                "rules": [_waf_rule_body(r) for r in rules],
+            }
+        }
+        negatives = [f"{r.name}/{p.value}" for r in rules for p in r.patterns if p.op == "!regex"]
+        plan = authorise_write(
+            app.settings,
+            operation="nv_update_waf_sensor",
+            toolset="policy_write",
+            target=sensor_name,
+            effect=(
+                f"REPLACE every rule on WAF sensor {sensor_name!r} with {len(rules)} rule(s): "
+                f"{_describe_waf_rules(rules)}. Any rule currently on the sensor and absent "
+                f"from this list is deleted and stops detecting. If the sensor is bound to a "
+                f"Protect-mode group these patterns start blocking traffic immediately. "
+                + (
+                    f"CAUTION: {len(negatives)} pattern(s) use '!regex' and fire on every "
+                    f"request that does NOT match ({', '.join(negatives)}). "
+                    if negatives
+                    else ""
+                )
+                + f"Confirm the current rules with nv_get_waf_sensor({sensor_name!r}) first."
+            ),
+            payload=payload,
+            confirm=confirm,
+        )
+        if plan is not None:
+            return plan
+
+        response = await app.client.request("PATCH", f"/v1/waf/sensor/{sensor_name}", json=payload)
+        return WriteOutcome(
+            status="applied",
+            operation="nv_update_waf_sensor",
+            target=sensor_name,
+            effect=f"WAF sensor {sensor_name} now carries {len(rules)} rule(s)",
+            payload=payload,
+            controller_response=response if isinstance(response, dict) else {},
+        )
+
+    @mcp.tool(
+        name="nv_delete_waf_sensor",
+        annotations=MUTATING,
+        tags={"policy_write", "write"},
+    )
+    async def nv_delete_waf_sensor(
+        ctx: Context,
+        sensor_name: Annotated[str, Field(min_length=1, description="Sensor to delete.")],
+        confirm: Annotated[
+            str | None,
+            Field(description="Confirmation token from the plan returned by the first call."),
+        ] = None,
+    ) -> WriteOutcome:
+        """Delete a WAF sensor and every rule it carries.
+
+        Deletion ends detection silently: any group the sensor was bound to keeps running
+        with one fewer sensor and nothing reports the gap. Check nv_get_waf_sensor for the
+        'groups' list before deleting - if it is non-empty you are removing live
+        inspection from those groups. Predefined sensors cannot be deleted.
+
+        Calls DELETE /v1/waf/sensor/{name}.
+        """
+        app = app_context(ctx)
+        plan = authorise_write(
+            app.settings,
+            operation="nv_delete_waf_sensor",
+            toolset="policy_write",
+            target=sensor_name,
+            effect=(
+                f"Delete WAF sensor {sensor_name!r} and all of its rules. Every group it is "
+                f"bound to loses that inspection immediately and silently. Run "
+                f"nv_get_waf_sensor({sensor_name!r}) and read its 'groups' field before "
+                f"confirming."
+            ),
+            payload=None,
+            confirm=confirm,
+        )
+        if plan is not None:
+            return plan
+
+        response = await app.client.request("DELETE", f"/v1/waf/sensor/{sensor_name}")
+        return WriteOutcome(
+            status="applied",
+            operation="nv_delete_waf_sensor",
+            target=sensor_name,
+            effect=f"WAF sensor {sensor_name} deleted",
+            controller_response=response if isinstance(response, dict) else {},
+        )
+
+    @mcp.tool(
+        name="nv_set_waf_group",
+        annotations=MUTATING,
+        tags={"policy_write", "write"},
+    )
+    async def nv_set_waf_group(
+        ctx: Context,
+        group_name: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Group to configure, e.g. 'nv.api.prod'. From nv_list_groups.",
+            ),
+        ],
+        sensors: Annotated[
+            list[WafSensorBindingInput],
+            Field(
+                description="The COMPLETE binding list after the change. This REPLACES the "
+                "group's bindings; an empty list unbinds every sensor. Read the current "
+                "bindings with nv_get_waf_group first.",
+            ),
+        ],
+        status: Annotated[
+            bool,
+            Field(
+                description="True enables WAF inspection for the group, False disables it "
+                "without changing the bindings."
+            ),
+        ] = True,
+        confirm: Annotated[
+            str | None,
+            Field(description="Confirmation token from the plan returned by the first call."),
+        ] = None,
+    ) -> WriteOutcome:
+        """Bind WAF sensors to a group and enable or disable inspection.
+
+        This is what makes a sensor live. Binding is a REPLACE: the list you send becomes
+        the group's entire binding set, and an omitted sensor is unbound.
+
+        Binding alone does not block. A bound sensor with action='deny' raises a threat
+        event in Discover and Monitor mode and only denies requests once the group is in
+        Protect mode, which is set separately with nv_set_group_policy_mode. Bind in
+        Monitor first, watch nv_query_security_events with kind='threat' for false
+        positives, and only then move the group to Protect.
+
+        Calls PATCH /v1/waf/group/{name} with {"config": {"name":..., "status":..., "replace": [{"name","action"}]}}.
+        """
+        # VERIFIED (live controller 5.4): 'replace' takes objects of {name, action} and
+        # sets the whole list. The sibling 'delete' key takes bare NAME STRINGS, not
+        # objects - sending objects there returns code 6 "Request in wrong format".
+        # This tool uses 'replace' only, so an empty list is the way to unbind.
+        app = app_context(ctx)
+        payload: dict[str, Any] = {
+            "config": {
+                "name": group_name,
+                "status": status,
+                "replace": [{"name": s.name, "action": s.action} for s in sensors],
+            }
+        }
+        denying = [s.name for s in sensors if s.action == "deny"]
+        binding_text = ", ".join(f"{s.name} ({s.action})" for s in sensors) if sensors else "none"
+        plan = authorise_write(
+            app.settings,
+            operation="nv_set_waf_group",
+            toolset="policy_write",
+            target=group_name,
+            effect=(
+                f"Set WAF inspection on group {group_name!r} to status={status} and REPLACE "
+                f"its sensor bindings with: {binding_text}. Any sensor currently bound and "
+                f"absent from this list is unbound and stops inspecting. "
+                + (
+                    f"{len(denying)} sensor(s) bind with action='deny' ({', '.join(denying)}): "
+                    f"these only raise threat events while the group is in Discover or Monitor "
+                    f"mode, and will DENY matching requests if the group is moved to Protect. "
+                    if denying
+                    else ""
+                )
+                + f"Check the group's current mode with nv_get_group({group_name!r}) so you "
+                f"know which of those two applies."
+            ),
+            payload=payload,
+            confirm=confirm,
+            namespace=_namespace_from_group_name(group_name),
+        )
+        if plan is not None:
+            return plan
+
+        response = await app.client.request("PATCH", f"/v1/waf/group/{group_name}", json=payload)
+        return WriteOutcome(
+            status="applied",
+            operation="nv_set_waf_group",
+            target=group_name,
+            effect=(
+                f"WAF on group {group_name}: status={status}, bindings replaced with {binding_text}"
             ),
             payload=payload,
             controller_response=response if isinstance(response, dict) else {},

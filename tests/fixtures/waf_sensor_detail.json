@@ -1,0 +1,43 @@
+{
+  "sensor": {
+    "name": "sensor.log4shell",
+    "comment": "Log4Shell - 0Day RCE exploit found in Log4j",
+    "cfg_type": "user_created",
+    "predefine": true,
+    "groups": ["nv.api.prod", "nv.web.prod"],
+    "rules": [
+      {
+        "name": "rule.log4shell",
+        "id": 40000,
+        "cfg_type": "user_created",
+        "patterns": [
+          {
+            "key": "pattern",
+            "op": "regex",
+            "value": "\\$\\{jndi:",
+            "context": "header"
+          }
+        ]
+      },
+      {
+        "name": "rule.log4shell-url",
+        "id": 40001,
+        "cfg_type": "user_created",
+        "patterns": [
+          {
+            "key": "pattern",
+            "op": "regex",
+            "value": "\\$\\{jndi:",
+            "context": "url"
+          },
+          {
+            "key": "pattern",
+            "op": "!regex",
+            "value": "^/healthz$",
+            "context": "url"
+          }
+        ]
+      }
+    ]
+  }
+}
