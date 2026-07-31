@@ -1,0 +1,9 @@
+/fossa-protect
+
+---
+
+Can we improve the accuracy of the skill from a procedural standpoint, not bug fixes like fixing the empty string fields?
+
+---
+
+I deleted the sensors so we can try this again. Write a handoff with the next steps to fix the empty string fields
