@@ -295,12 +295,14 @@ EXPECTED_CREATE_BODY = {
         "registry_type": "Docker Registry",
         "registry": REGISTRY_URL,
         "filters": ["a/*", "myorg/*:release-*"],
-        "auth_with_token": False,
         "scan_layers": False,
         "rescan_after_db_update": False,
         "ignore_proxy": False,
-        "username": "robot$scan",
-        "password": SECRET,
+        "auth": {
+            "auth_with_token": False,
+            "username": "robot$scan",
+            "password": SECRET,
+        },
     }
 }
 
@@ -336,8 +338,9 @@ async def test_create_registry_password_redacted_in_preview_payload(
         "nv_create_registry", {**CREATE_ARGS, "auth_token": "tok-not-real"}
     )
     config = plan.structured_content["payload"]["config"]
-    assert config["password"] == "***"
-    assert config["auth_token"] == "***"
+    # redaction has to follow the credentials down into the nested "auth" object
+    assert config["auth"]["password"] == "***"
+    assert config["auth"]["auth_token"] == "***"
     # every non-secret field stays inspectable
     assert config["registry"] == REGISTRY_URL
     assert config["filters"] == ["a/*", "myorg/*:release-*"]
@@ -354,8 +357,8 @@ async def test_create_registry_token_matches_between_preview_and_apply(
 
     result = await client.call_tool("nv_create_registry", {**CREATE_ARGS, "confirm": token})
     assert result.structured_content["status"] == "applied"
-    assert json.loads(route.calls.last.request.read())["config"]["password"] == SECRET
-    assert result.structured_content["payload"]["config"]["password"] == "***"
+    assert json.loads(route.calls.last.request.read())["config"]["auth"]["password"] == SECRET
+    assert result.structured_content["payload"]["config"]["auth"]["password"] == "***"
 
 
 async def test_create_registry_password_not_logged(
@@ -367,11 +370,39 @@ async def test_create_registry_password_not_logged(
         "nv_create_registry", {**CREATE_ARGS, "confirm": plan.structured_content["confirm_token"]}
     )
 
-    assert result.structured_content["payload"]["config"]["password"] == "***"
+    assert result.structured_content["payload"]["config"]["auth"]["password"] == "***"
     assert SECRET not in json.dumps(result.structured_content)
-    assert json.loads(route.calls.last.request.read())["config"]["password"] == SECRET
+    assert json.loads(route.calls.last.request.read())["config"]["auth"]["password"] == SECRET
     out, err = capfd.readouterr()
     assert SECRET not in out and SECRET not in err
+
+
+async def test_create_registry_credentials_nest_under_auth(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """Regression: flat credentials are silently dropped by POST /v2/scan/registry.
+
+    A live 5.4 controller answers 200 to a flat body and stores the entry with no
+    credentials at all, so every scan of a private repository then fails with
+    nothing in the response to explain why. Nesting is the whole fix; pin it.
+    """
+    route = nv_mock.post("/v2/scan/registry").respond(200, json={})
+    args = {**CREATE_ARGS, "auth_token": "tok-not-real", "auth_with_token": True}
+    plan = await client.call_tool("nv_create_registry", args)
+    await client.call_tool(
+        "nv_create_registry", {**args, "confirm": plan.structured_content["confirm_token"]}
+    )
+    config = json.loads(route.calls.last.request.read())["config"]
+
+    assert config["auth"] == {
+        "auth_with_token": True,
+        "username": "robot$scan",
+        "password": SECRET,
+        "auth_token": "tok-not-real",
+    }
+    # none of them may ALSO appear flat, where the controller ignores them
+    for field in ("username", "password", "auth_token", "auth_with_token"):
+        assert field not in config, f"{field} must not be sent flat"
 
 
 # --- nv_update_registry ------------------------------------------------------
@@ -407,11 +438,37 @@ async def test_update_registry_confirmed_applies(client, nv_mock: respx.MockRout
     assert json.loads(route.calls.last.request.read()) == {
         "config": {
             "name": "prod-harbor",
-            "password": SECRET,
             "repo_limit": 100,
             "filters": ["a/*", "myorg/*:release-*"],
+            "auth": {"password": SECRET},
         }
     }
+
+
+async def test_update_registry_credentials_nest_under_auth(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """Regression: a flat password change is accepted with 200 and changes nothing.
+
+    Worse here than on create - the caller is told the credential was rotated when
+    the stored one is untouched.
+    """
+    route = nv_mock.patch("/v2/scan/registry/prod-harbor").respond(200, json={})
+    args = {"name": "prod-harbor", "username": "robot$new", "password": SECRET}
+    plan = await client.call_tool("nv_update_registry", args)
+    await client.call_tool(
+        "nv_update_registry", {**args, "confirm": plan.structured_content["confirm_token"]}
+    )
+    config = json.loads(route.calls.last.request.read())["config"]
+
+    assert config == {
+        "name": "prod-harbor",
+        "auth": {"username": "robot$new", "password": SECRET},
+    }
+    # the plan still names the fields the caller passed, not the wire shape
+    assert plan.structured_content["effect"] == (
+        "Update registry 'prod-harbor': change password, username."
+    )
 
 
 async def test_update_registry_sends_only_changed_fields(client, nv_mock: respx.MockRouter) -> None:
@@ -444,9 +501,9 @@ async def test_update_registry_password_not_logged(
         "nv_update_registry", {**args, "confirm": plan.structured_content["confirm_token"]}
     )
 
-    assert result.structured_content["payload"]["config"]["password"] == "***"
+    assert result.structured_content["payload"]["config"]["auth"]["password"] == "***"
     assert SECRET not in json.dumps(result.structured_content)
-    assert json.loads(route.calls.last.request.read())["config"]["password"] == SECRET
+    assert json.loads(route.calls.last.request.read())["config"]["auth"]["password"] == SECRET
     out, err = capfd.readouterr()
     assert SECRET not in out and SECRET not in err
 

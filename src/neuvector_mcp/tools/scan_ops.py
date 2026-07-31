@@ -512,34 +512,44 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         are write-only from this server's point of view - 'password' and 'auth_token'
         are sent once, never logged, and shown as '***' in the returned payload, and no
         read tool can retrieve them afterwards. A duplicate name is rejected with code
-        13.
+        13. Credentials are nested under config.auth - sent flat the controller answers
+        200 and stores the entry with no credentials at all.
 
-        Calls POST /v2/scan/registry with {"config": {...}}.
+        Calls POST /v2/scan/registry with {"config": {..., "auth": {...}}}.
         """
         app = app_context(ctx)
-        # 1. build the payload. BLOCKED (schema): RESTRegistryConfigDataV2 is absent
-        #    from appendix B, so this is the documented V1 RESTRegistryConfig shape -
-        #    every field name is verified, only the V2 wrapper is not.
+        # 1. build the payload. The V2 endpoint nests every credential field under
+        #    "auth"; sent flat they are SILENTLY DROPPED - the controller answers 200
+        #    and stores an entry with no credentials, which then fails every scan of a
+        #    private repository. Verified against a live 5.4 controller: flat username
+        #    reads back as "", nested it reads back correctly, and a flat
+        #    auth_with_token=true reads back False. Non-credential fields stay flat;
+        #    those were confirmed to persist as-is.
         config: dict[str, Any] = {
             "name": name,
             "registry_type": registry_type,
             "registry": registry,
             # order is not semantic for repository patterns -> sorted for a stable token
             "filters": sorted(filters),
-            "auth_with_token": auth_with_token,
             "scan_layers": scan_layers,
             "rescan_after_db_update": rescan_after_db_update,
             "ignore_proxy": ignore_proxy,
         }
         for key, value in (
-            ("username", username),
-            ("password", password),
-            ("auth_token", auth_token),
             ("repo_limit", repo_limit),
             ("tag_limit", tag_limit),
         ):
             if value is not None:
                 config[key] = value
+        auth: dict[str, Any] = {"auth_with_token": auth_with_token}
+        for cred_key, cred_value in (
+            ("username", username),
+            ("password", password),
+            ("auth_token", auth_token),
+        ):
+            if cred_value is not None:
+                auth[cred_key] = cred_value
+        config["auth"] = auth
         wire_payload = {"config": config}
         safe_payload = redact_secrets(wire_payload)
 
@@ -654,19 +664,19 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         unexpectedly enormous next scan. New credentials are sent once, never logged,
         and shown as '***' in the returned payload; omitting 'password' leaves the
         stored credential untouched rather than clearing it. The registry kind cannot be
-        changed - delete the entry and create a new one instead.
+        changed - delete the entry and create a new one instead. Credentials are nested
+        under config.auth - sent flat the controller answers 200 and changes nothing.
 
-        Calls PATCH /v2/scan/registry/{name} with {"config": {...}}.
+        Calls PATCH /v2/scan/registry/{name} with {"config": {..., "auth": {...}}}.
         """
         app = app_context(ctx)
         # 1. build the payload from the arguments that were actually supplied.
+        #    Credentials nest under "auth" for the same reason as nv_create_registry:
+        #    sent flat the V2 route drops them silently, so a password change would
+        #    report success and leave the stored credential untouched.
         changes: dict[str, Any] = {}
         for key, value in (
             ("registry", registry),
-            ("username", username),
-            ("password", password),
-            ("auth_token", auth_token),
-            ("auth_with_token", auth_with_token),
             ("scan_layers", scan_layers),
             ("rescan_after_db_update", rescan_after_db_update),
             ("repo_limit", repo_limit),
@@ -675,12 +685,27 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         ):
             if value is not None:
                 changes[key] = value
+        auth: dict[str, Any] = {}
+        for key, value in (
+            ("username", username),
+            ("password", password),
+            ("auth_token", auth_token),
+            ("auth_with_token", auth_with_token),
+        ):
+            if value is not None:
+                auth[key] = value
         if filters is not None:
             changes["filters"] = sorted(filters)
-        if not changes:
+        if not changes and not auth:
             raise ValidationError_(
                 "nv_update_registry needs at least one field to change. No request was sent."
             )
+        # Name the fields the CALLER passed, not the wire shape: nesting credentials
+        # under "auth" must not turn "change password, scan_layers" into "change auth,
+        # scan_layers" and hide which credential is being replaced.
+        changed_fields = sorted([*changes, *auth])
+        if auth:
+            changes["auth"] = auth
         wire_payload = {"config": {"name": name, **changes}}
         safe_payload = redact_secrets(wire_payload)
 
@@ -690,7 +715,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             toolset="scan_ops",
             # field NAMES only: one of them may be 'password', and a value must never
             # reach the plan through the prose.
-            effect=f"Update registry {name!r}: change {', '.join(sorted(changes))}.",
+            effect=f"Update registry {name!r}: change {', '.join(changed_fields)}.",
             target=name,
             payload=safe_payload,
             confirm=confirm,
