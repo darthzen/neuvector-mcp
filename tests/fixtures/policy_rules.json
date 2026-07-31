@@ -1,0 +1,55 @@
+{
+  "rules": [
+    {
+      "id": 10001,
+      "comment": "learned in Discover mode",
+      "from": "nv.api.prod",
+      "to": "nv.postgres.prod",
+      "ports": "tcp/5432",
+      "action": "allow",
+      "applications": ["PostgreSQL"],
+      "learned": true,
+      "disable": false,
+      "created_timestamp": 1753500000,
+      "last_modified_timestamp": 1753500000,
+      "cfg_type": "learned",
+      "priority": 0,
+      "match_counter": 4211,
+      "last_match_timestamp": 1753900000
+    },
+    {
+      "id": 20004,
+      "comment": "operator added: allow ingress to the API",
+      "from": "nv.ingress.prod",
+      "to": "nv.api.prod",
+      "ports": "tcp/443,tcp/8443",
+      "action": "allow",
+      "applications": ["HTTPS"],
+      "learned": false,
+      "disable": false,
+      "created_timestamp": 1753600000,
+      "last_modified_timestamp": 1753610000,
+      "cfg_type": "user_created",
+      "priority": 0,
+      "match_counter": 91,
+      "last_match_timestamp": 1753899000
+    },
+    {
+      "id": 20005,
+      "comment": "block egress to the internet",
+      "from": "nv.api.prod",
+      "to": "external",
+      "ports": "any",
+      "action": "deny",
+      "applications": [],
+      "learned": false,
+      "disable": true,
+      "created_timestamp": 1753700000,
+      "last_modified_timestamp": 1753700000,
+      "cfg_type": "user_created",
+      "priority": 1,
+      "match_counter": 0,
+      "last_match_timestamp": 0
+    }
+  ]
+}

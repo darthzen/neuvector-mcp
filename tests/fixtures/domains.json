@@ -1,0 +1,5 @@
+{"tag_per_domain":true,"domains":[
+ {"name":"prod","workloads":24,"running_workloads":22,"running_pods":11,"services":6,"tags":["PCI","GDPR"],"labels":{}},
+ {"name":"staging","workloads":9,"running_workloads":8,"running_pods":4,"services":3,"tags":[],"labels":{}},
+ {"name":"neuvector","workloads":5,"running_workloads":5,"running_pods":5,"services":4,"tags":[],"labels":{}}
+]}

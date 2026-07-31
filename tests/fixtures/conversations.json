@@ -1,0 +1,5 @@
+{"conversations":[
+ {"from":"nv.api.prod","to":"nv.worker.prod","bytes":184320,"sessions":412,"policy_action":"allow","applications":["HTTP"],"ports":["tcp/8080"],"severity":""},
+ {"from":"external","to":"nv.api.prod","bytes":9930112,"sessions":15408,"policy_action":"open","applications":["HTTPS"],"ports":["tcp/443"],"severity":""},
+ {"from":"nv.worker.prod","to":"nv.redis.staging","bytes":40960,"sessions":73,"policy_action":"violate","applications":["Redis"],"ports":["tcp/6379"],"severity":"Medium"}
+]}

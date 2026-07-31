@@ -68,7 +68,6 @@ class Report:
 
 async def collect_tools() -> list[object]:
     from conftest import make_settings  # type: ignore[import-not-found]
-
     from neuvector_mcp.config import ALL_TOOLSETS
     from neuvector_mcp.server import build_server
 
@@ -149,7 +148,9 @@ def main() -> int:
         else:
             mutating_tags = MUTATING_TOOLSETS.intersection(tags)
             if mutating_tags and ann.readOnlyHint is not False:
-                report.fail("R3", name, f"toolset {sorted(mutating_tags)} requires readOnlyHint=False")
+                report.fail(
+                    "R3", name, f"toolset {sorted(mutating_tags)} requires readOnlyHint=False"
+                )
             if not mutating_tags and ann.readOnlyHint is not True:
                 report.fail("R3", name, "read tool requires readOnlyHint=True")
 
@@ -158,7 +159,9 @@ def main() -> int:
         toolset_tags = tags.intersection(ALL_TOOLSETS)
         if len(toolset_tags) != 1:
             report.fail(
-                "R4", name, f"needs exactly one toolset tag from {sorted(ALL_TOOLSETS)}, has {sorted(tags)}"
+                "R4",
+                name,
+                f"needs exactly one toolset tag from {sorted(ALL_TOOLSETS)}, has {sorted(tags)}",
             )
 
         # R5 confirm parameter on mutating tools
@@ -172,7 +175,9 @@ def main() -> int:
         report.count("R6")
         calls = CALLS_RE.findall(doc)
         if not calls:
-            report.fail("R6", name, "description must name each endpoint as 'Calls <METHOD> <path>'")
+            report.fail(
+                "R6", name, "description must name each endpoint as 'Calls <METHOD> <path>'"
+            )
         for method, path in calls:
             call = f"{method} {path.rstrip('.')}"
             if path_matches(call, documented):
@@ -200,7 +205,12 @@ def main() -> int:
         report.fail("R9", "<server>", "no mutating tools registered with all toolsets enabled")
 
     if args.json:
-        print(json.dumps({"tools": len(tools), "checked": report.checked, "violations": report.violations}, indent=1))
+        print(
+            json.dumps(
+                {"tools": len(tools), "checked": report.checked, "violations": report.violations},
+                indent=1,
+            )
+        )
     else:
         print(f"verify_spec: {len(tools)} tools introspected")
         for rule in sorted(report.checked):

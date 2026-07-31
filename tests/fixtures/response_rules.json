@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "id": 1,
+      "event": "security-event",
+      "comment": "quarantine on a critical threat",
+      "group": "nv.api.prod",
+      "conditions": [
+        {"type": "name", "value": "Kubernetes.Privileged.Escalation"},
+        {"type": "level", "value": "Critical"}
+      ],
+      "actions": ["quarantine", "webhook"],
+      "webhooks": ["soc-slack"],
+      "disable": false,
+      "cfg_type": "user_created"
+    },
+    {
+      "id": 2,
+      "event": "compliance",
+      "comment": "suppress noisy benchmark findings",
+      "group": "",
+      "conditions": [],
+      "actions": ["suppress-log"],
+      "webhooks": [],
+      "disable": true,
+      "cfg_type": "ground"
+    },
+    {
+      "id": 3,
+      "event": "admission-control",
+      "comment": "notify on admission denials",
+      "group": "",
+      "conditions": [{"type": "name", "value": "deny-privileged"}],
+      "actions": ["webhook"],
+      "webhooks": ["soc-slack", "pagerduty"],
+      "disable": false,
+      "cfg_type": "user_created"
+    }
+  ]
+}

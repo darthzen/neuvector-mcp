@@ -1,0 +1,39 @@
+{
+  "servers": [
+    {
+      "name": "corp-ldap",
+      "enable": true,
+      "ldap": {
+        "hostname": "ldap.corp.example.test",
+        "base_dn": "dc=corp,dc=example,dc=test",
+        "bind_dn": "cn=nv-bind,dc=corp,dc=example,dc=test",
+        "bind_password": "NESTED-LDAP-BIND-PW-aaa111",
+        "default_role": "reader"
+      },
+      "bind_password": "TOP-LEVEL-BIND-PW-bbb222"
+    },
+    {
+      "name": "corp-oidc",
+      "enable": true,
+      "oidc": {
+        "issuer": "https://login.corp.example.test",
+        "client_id": "neuvector",
+        "client_secret": "NESTED-OIDC-CLIENT-SECRET-ccc333",
+        "default_role": "reader"
+      },
+      "client_secret": "TOP-LEVEL-OIDC-SECRET-ddd444"
+    },
+    {
+      "name": "corp-saml",
+      "enable": false,
+      "saml": {
+        "sso_url": "https://sso.corp.example.test/saml",
+        "issuer": "neuvector",
+        "x509_cert": "MIIBIjANBg...",
+        "default_role": "reader"
+      },
+      "signing_private_key": "TOP-LEVEL-SIGNING-KEY-eee555",
+      "api_token": "TOP-LEVEL-API-TOKEN-fff666"
+    }
+  ]
+}

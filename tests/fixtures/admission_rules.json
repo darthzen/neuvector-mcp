@@ -1,0 +1,52 @@
+{
+  "rules": [
+    {
+      "id": 1000,
+      "category": "Kubernetes",
+      "comment": "deny privileged containers",
+      "criteria": [
+        {"name": "runAsPrivileged", "op": "=", "value": "true"},
+        {
+          "name": "imageRegistry",
+          "op": "containsAny",
+          "value": "docker.io",
+          "sub_criteria": [
+            {"name": "publishDays", "op": ">=", "value": "30"},
+            {"name": "imageScanned", "op": "=", "value": "false"}
+          ]
+        },
+        {"name": "namespace", "op": "containsAll", "value": "prod"}
+      ],
+      "disable": false,
+      "critical": true,
+      "cfg_type": "user_created",
+      "rule_type": "deny",
+      "rule_mode": "protect",
+      "containers": ["containers", "init_containers"]
+    },
+    {
+      "id": 1001,
+      "category": "Kubernetes",
+      "comment": "exempt the platform namespace",
+      "criteria": [{"name": "namespace", "op": "containsAny", "value": "kube-system"}],
+      "disable": false,
+      "critical": false,
+      "cfg_type": "ground",
+      "rule_type": "exception",
+      "rule_mode": "",
+      "containers": ["containers"]
+    },
+    {
+      "id": 1002,
+      "category": "Kubernetes",
+      "comment": "federated deny for unscanned images",
+      "criteria": [{"name": "imageScanned", "op": "=", "value": "false"}],
+      "disable": true,
+      "critical": false,
+      "cfg_type": "federal",
+      "rule_type": "deny",
+      "rule_mode": "monitor",
+      "containers": ["containers", "ephemeral_containers"]
+    }
+  ]
+}

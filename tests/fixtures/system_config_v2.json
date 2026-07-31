@@ -1,0 +1,71 @@
+{
+  "config": {
+    "new_svc": {
+      "new_service_policy_mode": "Monitor",
+      "new_service_profile_baseline": "zero-drift"
+    },
+    "syslog": {
+      "syslog_ip": "10.0.0.9",
+      "syslog_ip_proto": 17,
+      "syslog_port": 514,
+      "syslog_level": "Warning",
+      "syslog_status": true,
+      "syslog_categories": ["event", "security-event"],
+      "syslog_in_json": false,
+      "single_cve_per_syslog": true,
+      "syslog_cve_in_layers": false,
+      "syslog_server_cert": "",
+      "output_event_to_logs": false
+    },
+    "auth": {
+      "auth_order": ["local", "ldap1"],
+      "auth_by_platform": false,
+      "rancher_ep": ""
+    },
+    "misc": {
+      "configured_internal_subnets": ["10.0.0.0/8"],
+      "unused_group_aging": 24,
+      "cluster_name": "prod-east",
+      "controller_debug": [],
+      "csp_type": "",
+      "monitor_service_mesh": false,
+      "no_telemetry_report": false,
+      "cfg_type": "user_created"
+    },
+    "webhooks": [],
+    "proxy": {
+      "registry_http_proxy_status": false,
+      "registry_https_proxy_status": false,
+      "registry_http_proxy": {"url": "", "username": ""},
+      "registry_https_proxy": {"url": "", "username": ""}
+    },
+    "ibmsa": {
+      "ibmsa_ep_enabled": false,
+      "ibmsa_ep_start": 0,
+      "ibmsa_ep_dashboard_url": "",
+      "ibmsa_ep_connected_at": ""
+    },
+    "net_svc": {
+      "net_service_status": false,
+      "new_service_profile_baseline": "zero-drift",
+      "disable_net_policy": false,
+      "detect_unmanaged_wl": false,
+      "strict_group_mode": true
+    },
+    "mode_auto": {
+      "mode_auto_d2m": false,
+      "mode_auto_d2m_duration": 3600,
+      "mode_auto_m2p": false,
+      "mode_auto_m2p_duration": 86400
+    },
+    "scanner_autoscale": {
+      "strategy": "",
+      "min_pods": 1,
+      "max_pods": 3
+    },
+    "tls_cfg": {
+      "enable_tls_verification": true,
+      "cacerts": []
+    }
+  }
+}

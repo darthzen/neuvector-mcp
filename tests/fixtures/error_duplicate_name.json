@@ -1,0 +1,5 @@
+{
+  "code": 13,
+  "error": "Duplicate name",
+  "message": "A group with that name already exists"
+}

@@ -7,7 +7,7 @@ middleware, auth and toolset registration, then hands control to FastMCP.
 from __future__ import annotations
 
 import contextlib
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import structlog
 from fastmcp import FastMCP
@@ -18,12 +18,44 @@ from .audit import AuditMiddleware, configure_logging
 from .client import NeuVectorClient
 from .config import Settings, load_settings
 from .context import AppContext
-from .tools import inventory, policy_write
+from .tools import (
+    admission,
+    compliance,
+    events,
+    iam_read,
+    iam_write,
+    inventory,
+    policy_read,
+    policy_write,
+    runtime_ops,
+    scan_ops,
+    system,
+    vulnerability,
+)
 
 log = structlog.get_logger(__name__)
 
 SERVER_NAME = "neuvector"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.0.1"
+
+#: Every toolset module, in registration order. Each exposes
+#: ``register(mcp, settings)`` and is responsible for checking whether its own
+#: toolset is enabled, so registration order carries no meaning beyond the order
+#: tools appear in ``tools/list``.
+TOOL_MODULES = (
+    inventory,
+    vulnerability,
+    compliance,
+    events,
+    policy_read,
+    iam_read,
+    policy_write,
+    admission,
+    scan_ops,
+    runtime_ops,
+    iam_write,
+    system,
+)
 
 INSTRUCTIONS = """\
 NeuVector container security control plane.
@@ -117,7 +149,7 @@ def build_server(settings: Settings | None = None) -> FastMCP:
     )
     mcp._nv_settings = settings  # type: ignore[attr-defined]
 
-    for module in (inventory, policy_write):
+    for module in TOOL_MODULES:
         module.register(mcp, settings)
 
     return mcp

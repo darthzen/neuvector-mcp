@@ -1,0 +1,40 @@
+{
+  "global_mode": "protect",
+  "props_unavailable": ["imageSigned"],
+  "results": [
+    {
+      "index": 0,
+      "name": "api",
+      "kind": "Deployment",
+      "message": "Denied: container runs as privileged.",
+      "allowed": false,
+      "matched_rules": [
+        {
+          "container_image": "registry.acme.test/api:1.4.2",
+          "id": 1000,
+          "disabled": false,
+          "type": "deny",
+          "mode": "protect",
+          "rule_details": "criteria: runAsPrivileged = true",
+          "rule_cfg_type": "user_created"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "name": "worker",
+      "kind": "Deployment",
+      "message": "Allowed: no deny rule matched.",
+      "allowed": true,
+      "matched_rules": []
+    },
+    {
+      "index": 2,
+      "name": "batch-import",
+      "kind": "CronJob",
+      "message": "Denied: image is not scanned.",
+      "allowed": false,
+      "matched_rules": []
+    }
+  ]
+}

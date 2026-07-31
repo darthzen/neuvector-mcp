@@ -80,7 +80,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: server
-          image: localhost:5000/neuvector-mcp:1.0.0
+          image: localhost:5000/neuvector-mcp:1.0.1
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

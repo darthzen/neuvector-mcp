@@ -1,0 +1,85 @@
+{
+  "run_timestamp": 1753855200,
+  "run_at": "2026-07-30T06:00:00Z",
+  "cis_version": "cis-1.9",
+  "items": [
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "PASS",
+      "test_number": "K.1.1.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the API server pod specification file permissions are set to 600 or more restrictive",
+      "message": ["permissions are 600"],
+      "remediation": "chmod 600 /etc/kubernetes/manifests/kube-apiserver.yaml",
+      "group": ""
+    },
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "PASS",
+      "test_number": "K.1.1.2",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the API server pod specification file ownership is set to root:root",
+      "message": ["owner is root:root"],
+      "remediation": "chown root:root /etc/kubernetes/manifests/kube-apiserver.yaml",
+      "group": ""
+    },
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "WARN",
+      "test_number": "K.1.2.6",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the --kubelet-certificate-authority argument is set as appropriate",
+      "message": ["--kubelet-certificate-authority is not set"],
+      "remediation": "Set --kubelet-certificate-authority on the API server.",
+      "group": ""
+    },
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "WARN",
+      "test_number": "K.1.2.19",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the --audit-log-maxbackup argument is set to 10 or as appropriate",
+      "message": ["--audit-log-maxbackup is not set"],
+      "remediation": "Set --audit-log-maxbackup=10 on the API server.",
+      "group": ""
+    },
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "PASS",
+      "test_number": "K.2.1",
+      "profile": "Level 1",
+      "scored": true,
+      "automated": true,
+      "description": "Ensure that the --cert-file and --key-file arguments are set as appropriate",
+      "message": ["etcd is serving TLS"],
+      "remediation": "Set --cert-file and --key-file on etcd.",
+      "group": ""
+    },
+    {
+      "catalog": "kubernetes",
+      "type": "host",
+      "level": "INFO",
+      "test_number": "K.5.1.5",
+      "profile": "Level 2",
+      "scored": false,
+      "automated": false,
+      "description": "Ensure that default service accounts are not actively used",
+      "message": ["manual review required"],
+      "remediation": "Set automountServiceAccountToken to false on default service accounts.",
+      "group": ""
+    }
+  ]
+}

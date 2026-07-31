@@ -1,0 +1,5 @@
+{"services":[
+ {"name":"api.prod","comment":"","policy_mode":"Protect","profile_mode":"Protect","not_scored":false,"domain":"prod","platform_role":"","members":[{"id":"a1b2c3d4e5f6"},{"id":"f6e5d4c3b2a1"}],"policy_rules":[{"id":1001},{"id":1002}],"response_rules":[{"id":7}],"service_addr":{"ip":"10.43.0.11","port":8080},"ingress_exposure":true,"egress_exposure":false,"baseline_profile":"zero-drift","cap_change_mode":true,"cap_scorable":true},
+ {"name":"worker.prod","comment":"","policy_mode":"Monitor","profile_mode":"Monitor","not_scored":false,"domain":"prod","platform_role":"","members":[{"id":"f6e5d4c3b2a1"}],"policy_rules":[{"id":1004}],"response_rules":[],"ingress_exposure":false,"egress_exposure":true,"baseline_profile":"basic","cap_change_mode":true,"cap_scorable":true},
+ {"name":"redis.staging","comment":"","policy_mode":"Discover","profile_mode":"Discover","not_scored":true,"domain":"staging","platform_role":"system","members":[],"policy_rules":[],"response_rules":[],"ingress_exposure":false,"egress_exposure":false,"baseline_profile":"basic","cap_change_mode":true,"cap_scorable":false}
+]}

@@ -1,0 +1,46 @@
+{
+  "process_profile": {
+    "group": "nv.api.prod",
+    "alert_disabled": false,
+    "hash_enabled": true,
+    "mode": "Protect",
+    "process_list": [
+      {
+        "name": "python3",
+        "path": "/usr/local/bin/python3",
+        "user": "app",
+        "uid": 1000,
+        "action": "allow",
+        "cfg_type": "learned",
+        "uuid": "7f2f1a4e-2b7c-4d1e-9a4d-0c1f5b6a8e21",
+        "group": "nv.api.prod",
+        "created_timestamp": 1753500000,
+        "last_modified_timestamp": 1753500000
+      },
+      {
+        "name": "sh",
+        "path": "/bin/sh",
+        "user": "root",
+        "uid": 0,
+        "action": "deny",
+        "cfg_type": "user_created",
+        "uuid": "1c9d3f60-9c11-4a2b-8f5b-2d7e4a9c0b33",
+        "group": "nv.api.prod",
+        "created_timestamp": 1753600000,
+        "last_modified_timestamp": 1753600500
+      },
+      {
+        "name": "curl",
+        "path": "/usr/bin/curl",
+        "user": "app",
+        "uid": 1000,
+        "action": "allow",
+        "cfg_type": "system_defined",
+        "uuid": "b0a1c2d3-4e5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "group": "nodes",
+        "created_timestamp": 1753610000,
+        "last_modified_timestamp": 1753610000
+      }
+    ]
+  }
+}

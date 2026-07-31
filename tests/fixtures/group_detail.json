@@ -1,0 +1,32 @@
+{"group":{
+ "name":"nv.api.prod",
+ "learned":true,
+ "reserved":false,
+ "policy_mode":"Protect",
+ "domain":"prod",
+ "creater_domains":[],
+ "kind":"container",
+ "platform_role":"",
+ "cap_change_mode":true,
+ "cfg_type":"learned",
+ "monitor_metric":false,
+ "group_sess_cur":12,
+ "group_sess_rate":3,
+ "group_band_width":0,
+ "criteria":[
+  {"key":"service","value":"api.prod","op":"="},
+  {"key":"domain","value":"prod","op":"="}
+ ],
+ "members":[
+  {"id":"a1b2c3d4e5f6","name":"api-7d9f8-abcde","display_name":"api-7d9f8-abcde","pod_name":"api-7d9f8-abcde","image":"registry.local/api:1.4.2","image_id":"sha256:1111","domain":"prod","state":"protect","service":"api.prod","service_group":"nv.api.prod","platform_role":"","cap_sniff":true,"cap_quarantine":true,"cap_change_mode":true,"policy_mode":"Protect","profile_mode":"Protect","baseline_profile":"zero-drift","scan_summary":{"status":"finished","high":2,"medium":11}},
+  {"id":"f6e5d4c3b2a1","name":"api-7d9f8-fghij","display_name":"api-7d9f8-fghij","pod_name":"api-7d9f8-fghij","image":"registry.local/api:1.4.2","image_id":"sha256:1111","domain":"prod","state":"protect","service":"api.prod","service_group":"nv.api.prod","platform_role":"","cap_sniff":true,"cap_quarantine":true,"cap_change_mode":true,"policy_mode":"Protect","profile_mode":"Protect","baseline_profile":"zero-drift","scan_summary":{"status":"finished","high":2,"medium":11}},
+  {"id":"0123456789ab","name":"api-7d9f8-klmno","display_name":"api-7d9f8-klmno","pod_name":"api-7d9f8-klmno","image":"registry.local/api:1.4.2","image_id":"sha256:1111","domain":"prod","state":"protect","service":"api.prod","service_group":"nv.api.prod","platform_role":"","cap_sniff":true,"cap_quarantine":true,"cap_change_mode":true,"policy_mode":"Protect","profile_mode":"Protect","baseline_profile":"zero-drift","scan_summary":{"status":"finished","high":2,"medium":11}}
+ ],
+ "policy_rules":[
+  {"id":1001,"comment":"","from":"nv.api.prod","to":"nv.worker.prod","ports":"tcp/8080","action":"allow","applications":["HTTP"],"learned":true,"disable":false,"cfg_type":"learned","priority":0},
+  {"id":1002,"comment":"","from":"external","to":"nv.api.prod","ports":"tcp/443","action":"allow","applications":["HTTPS"],"learned":false,"disable":false,"cfg_type":"user_created","priority":0}
+ ],
+ "response_rules":[
+  {"id":7,"event":"security-event","comment":"page on violation","group":"nv.api.prod","conditions":[],"actions":["webhook"],"webhooks":["slack"],"disable":false,"cfg_type":"user_created"}
+ ]
+}}

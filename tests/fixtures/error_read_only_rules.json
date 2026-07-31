@@ -1,0 +1,5 @@
+{
+  "code": 46,
+  "error": "Read-only rule(s) cannot be updated by current login user",
+  "message": "The rule is critical or has cfg_type federal/ground"
+}

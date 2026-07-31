@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 PY      ?= python3
 IMAGE   ?= neuvector-mcp
-TAG     ?= 1.0.0
+TAG     ?= 1.0.1
 REGISTRY?= localhost:5000
 
 .PHONY: help
@@ -43,7 +43,7 @@ verify: lint types test spec ## the full gate; CI runs exactly this
 	@echo "VERIFY OK"
 
 .PHONY: image
-image: ## build the container image on openSUSE BCI
+image: ## build the container image on SUSE BCI
 	podman build -t $(REGISTRY)/$(IMAGE):$(TAG) -f deploy/Dockerfile .
 
 .PHONY: clean

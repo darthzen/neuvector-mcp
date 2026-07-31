@@ -1,0 +1,5 @@
+{
+  "code": 30,
+  "error": "Admission control is not supported on non-Kubernetes environment",
+  "message": "The controller is not running on Kubernetes, so the admission webhook cannot be configured"
+}

@@ -1,0 +1,5 @@
+{
+  "code": 4,
+  "error": "Operation not allowed",
+  "message": "Learned group cannot be modified"
+}

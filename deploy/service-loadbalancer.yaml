@@ -1,0 +1,34 @@
+# Optional: expose the server on a LoadBalancer address instead of the ClusterIP
+# Service in deployment.yaml. Apply this INSTEAD of that Service, not alongside
+# it -- both claim the name `neuvector-mcp`, so applying this one overwrites it.
+#
+#   kubectl apply -f deploy/deployment.yaml
+#   kubectl apply -f deploy/service-loadbalancer.yaml
+#
+# Use this when MCP clients live outside the cluster. Everything reachable on
+# this address is guarded by the bearer token alone, so treat the address as
+# private: put it on a LAN pool, not a public one.
+#
+# The annotation below is MetalLB's. Other implementations spell a fixed address
+# differently (Cilium uses `io.cilium/lb-ipam-ips`, cloud providers use their own
+# annotations, and `spec.loadBalancerIP` is deprecated upstream). Drop the
+# annotation entirely to let the controller assign any free address.
+#
+# The NetworkPolicy in deployment.yaml needs no change: its ingress rule has no
+# `from` selector, so it already admits off-cluster sources on port 8080.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neuvector-mcp
+  namespace: neuvector-mcp
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: REPLACE_ME_LOADBALANCER_IP
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: neuvector-mcp
+  ports:
+    - name: mcp
+      port: 8080
+      targetPort: mcp

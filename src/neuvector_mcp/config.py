@@ -146,13 +146,11 @@ class Settings(BaseModel):
     def _known_toolsets(cls, v: tuple[str, ...]) -> tuple[str, ...]:
         unknown = sorted(set(v) - set(ALL_TOOLSETS))
         if unknown:
-            raise ValueError(
-                f"unknown toolset(s) {unknown}; valid values: {sorted(ALL_TOOLSETS)}"
-            )
+            raise ValueError(f"unknown toolset(s) {unknown}; valid values: {sorted(ALL_TOOLSETS)}")
         return v
 
     @model_validator(mode="after")
-    def _credentials_present(self) -> "Settings":
+    def _credentials_present(self) -> Settings:
         if self.auth_mode == "apikey":
             if not (self.api_access_key and self.api_secret_key):
                 raise ValueError(
@@ -160,13 +158,11 @@ class Settings(BaseModel):
                 )
         else:
             if not (self.username and self.password):
-                raise ValueError(
-                    "auth_mode=password requires NV_USERNAME and NV_PASSWORD"
-                )
+                raise ValueError("auth_mode=password requires NV_USERNAME and NV_PASSWORD")
         return self
 
     @model_validator(mode="after")
-    def _read_only_consistency(self) -> "Settings":
+    def _read_only_consistency(self) -> Settings:
         if self.read_only:
             enabled_mutating = MUTATING_TOOLSETS.intersection(self.toolsets)
             if enabled_mutating:

@@ -1,9 +1,11 @@
 """Shared fixtures. Every test runs fully offline against a respx-mocked controller."""
+
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 import respx

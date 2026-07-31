@@ -1,0 +1,27 @@
+{
+  "profiles": [
+    {
+      "name": "default",
+      "disable_system": false,
+      "cfg_type": "user_created",
+      "entries": [
+        {"test_number": "K.1.2.6", "tags": ["PCI", "GDPR"]},
+        {"test_number": "D.2.1", "tags": ["PCI"]}
+      ]
+    },
+    {
+      "name": "pci-strict",
+      "disable_system": true,
+      "cfg_type": "ground",
+      "entries": [
+        {"test_number": "I.4.6", "tags": ["PCI"]}
+      ]
+    },
+    {
+      "name": "audit-only",
+      "disable_system": false,
+      "cfg_type": "user_created",
+      "entries": []
+    }
+  ]
+}

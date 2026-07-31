@@ -1,0 +1,62 @@
+{
+  "users": [
+    {
+      "fullname": "admin",
+      "server": "",
+      "username": "admin",
+      "password": "SuperSecretPlanted123!",
+      "email": "admin@example.test",
+      "role": "admin",
+      "timeout": 300,
+      "locale": "en",
+      "default_password": true,
+      "modify_password": true,
+      "role_domains": {
+        "reader": ["prod", "staging"]
+      },
+      "last_login_timestamp": 1753900000,
+      "last_login_at": "2026-07-30T09:00:00Z",
+      "login_count": 42,
+      "blocked_for_failed_login": false,
+      "blocked_for_password_expired": false,
+      "password_resettable": true
+    },
+    {
+      "fullname": "ldap-auditor",
+      "server": "corp-ldap",
+      "username": "ldap-auditor",
+      "email": "auditor@example.test",
+      "role": "reader",
+      "timeout": 600,
+      "locale": "en",
+      "modify_password": false,
+      "role_domains": {},
+      "last_login_timestamp": 0,
+      "last_login_at": "",
+      "login_count": 0,
+      "blocked_for_failed_login": true,
+      "blocked_for_password_expired": false,
+      "password_resettable": false
+    },
+    {
+      "fullname": "ci-bot",
+      "server": "",
+      "username": "ci-bot",
+      "email": "ci@example.test",
+      "role": "",
+      "timeout": 60,
+      "locale": "en",
+      "default_password": false,
+      "role_domains": {
+        "admin": ["ci"]
+      },
+      "last_login_timestamp": 1753800000,
+      "last_login_at": "2026-07-29T09:00:00Z",
+      "login_count": 7,
+      "blocked_for_failed_login": false,
+      "blocked_for_password_expired": true
+    }
+  ],
+  "global_roles": ["admin", "reader"],
+  "domain_roles": ["admin", "reader"]
+}
