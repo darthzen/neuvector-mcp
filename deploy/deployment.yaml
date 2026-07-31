@@ -46,8 +46,12 @@ data:
   NV_AUTH_MODE: "apikey"
   NV_TRANSPORT: "http"
   NV_HTTP_PATH: "/mcp"
-  NV_READ_ONLY: "true"
-  NV_TOOLSETS: "inventory,vulnerability,compliance,events,policy_read"
+  # Write-capable. Every mutating tool still needs the two-step confirm-token
+  # handshake below, which is what makes this safe rather than the read-only flag.
+  # Flip NV_READ_ONLY to "true" for a deployment that must never write, and cut
+  # NV_TOOLSETS back to the five read toolsets to match.
+  NV_READ_ONLY: "false"
+  NV_TOOLSETS: "inventory,vulnerability,compliance,events,policy_read,policy_write,scan_ops,runtime_ops"
   NV_REQUIRE_CONFIRM_TOKEN: "true"
   NV_MAX_ITEMS: "200"
   NV_MAX_RESPONSE_CHARS: "60000"
@@ -80,7 +84,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: server
-          image: localhost:5000/neuvector-mcp:1.1.0
+          # Built in-cluster by deploy/build-job.yaml, which clones main from
+          # GitHub and pushes here. Bump both together.
+          image: registry.ash4d.com/ash4d-lab/neuvector-mcp:1.1.1
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
