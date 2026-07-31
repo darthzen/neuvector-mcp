@@ -86,7 +86,7 @@ spec:
         - name: server
           # Built in-cluster by deploy/build-job.yaml, which clones main from
           # GitHub and pushes here. Bump both together.
-          image: registry.ash4d.com/ash4d-lab/neuvector-mcp:1.1.1
+          image: registry.ash4d.com/ash4d-lab/neuvector-mcp:1.1.2
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

@@ -922,12 +922,16 @@ but **not** its preview/apply pair. Add both in `tests/test_policy_write.py`:
 >    strips the `nv.` prefix and sends `{"config": {"services": [<service>],
 >    "policy_mode": ...}}`. See the note on Appendix B below, which called this
 >    out as blocked and was resolved by measurement, not by guessing a key.
-> 2. The controller accepts a mode move of only one rung along
->    `Discover -> Monitor -> Protect` and silently discards a two-rung jump. The
->    tool now reads the current mode with `GET /v1/service`, steps through
->    `Monitor` when it has to, and reads the service back before reporting
->    `applied`. The shared ladder helpers live in `neuvector_mcp/modes.py` and are
+> 2. The controller applies the change *after* it acknowledges it — 0.33–0.59s
+>    measured — so a `200` proves nothing and neither does a read taken straight
+>    after one. The tool now reads the current mode with `GET /v1/service`, sends
+>    one `PATCH`, and re-reads until the controller agrees before reporting
+>    `applied`. The shared helpers live in `neuvector_mcp/modes.py` and are
 >    documented under `nv_set_service_mode` in PART-D.
+>
+>    A revision between these two briefly stepped every change through `Monitor`,
+>    believing a two-rung move was silently discarded. It is not; that was this
+>    same asynchrony misread. See the retraction under `nv_set_service_mode`.
 >
 > `test_guard.py` has grown accordingly and the "add nothing, edit nothing" note
 > further down no longer holds.

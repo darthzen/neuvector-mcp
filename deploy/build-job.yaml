@@ -1,4 +1,4 @@
-# One-shot in-cluster build of neuvector-mcp 1.1.1.
+# One-shot in-cluster build of neuvector-mcp 1.1.2.
 #
 # Runs on sdf1 (amd64) so no emulation is involved. The source is the public
 # GitHub repo at main, cloned by kaniko itself, so nothing is uploaded from the
@@ -10,7 +10,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: neuvector-mcp-build-1-1-1
+  name: neuvector-mcp-build-1-1-2
   namespace: ai
   labels:
     app: neuvector-mcp
@@ -33,7 +33,7 @@ spec:
           args:
             - --context=git://github.com/darthzen/neuvector-mcp.git#refs/heads/main
             - --dockerfile=deploy/Dockerfile
-            - --destination=registry.ash4d.com/ash4d-lab/neuvector-mcp:1.1.1
+            - --destination=registry.ash4d.com/ash4d-lab/neuvector-mcp:1.1.2
             - --verbosity=info
           resources:
             requests:

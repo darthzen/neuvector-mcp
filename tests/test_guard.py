@@ -45,9 +45,11 @@ async def test_confirmed_call_applies(client, nv_mock: respx.MockRouter) -> None
     assert fake.mode("api.prod") == "Protect"
 
 
-async def test_confirmed_call_steps_through_monitor(client, nv_mock: respx.MockRouter) -> None:
-    """Discover -> Protect on this endpoint is accepted with 200 and dropped."""
-    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}).install(nv_mock)
+async def test_confirmed_call_survives_the_controller_write_lag(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    """The controller acknowledges before the change is readable; that is not a failure."""
+    fake = FakeServices({"api.prod": {"policy_mode": "Discover"}}, lag_reads=3).install(nv_mock)
     args = {"group_name": "nv.api.prod", "mode": "Protect"}
     plan = await client.call_tool("nv_set_group_policy_mode", args)
 
@@ -56,9 +58,10 @@ async def test_confirmed_call_steps_through_monitor(client, nv_mock: respx.MockR
         {**args, "confirm": plan.structured_content["confirm_token"]},
     )
 
-    assert [config["policy_mode"] for config in fake.patches] == ["Monitor", "Protect"]
+    assert fake.patches == [{"services": ["api.prod"], "policy_mode": "Protect"}]
     assert fake.mode("api.prod") == "Protect"
-    assert "Discover -> Monitor -> Protect" in result.structured_content["effect"]
+    assert "Discover -> Protect" in result.structured_content["effect"]
+    assert fake.writes.call_count == 1, "the write is not retried, only the read"
 
 
 async def test_confirmed_call_refuses_to_claim_a_dropped_change(
@@ -76,7 +79,7 @@ async def test_confirmed_call_refuses_to_claim_a_dropped_change(
             {**args, "confirm": plan.structured_content["confirm_token"]},
         )
 
-    assert "did not apply" in str(excinfo.value)
+    assert "did not take" in str(excinfo.value)
     assert fake.writes.call_count == 1
 
 
