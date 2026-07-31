@@ -174,10 +174,22 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         that the learned policy does not allow. Preview first: call without
         'confirm', read the returned plan, then call again with the token.
 
-        Calls PATCH /v1/group/{name} with {"config": {"name":..., "policy_mode":...}}.
+        Policy mode lives on the service, not the group object: RESTGroupConfig
+        has no policy_mode field and the controller answers 200 while dropping
+        it. Only learned groups ('nv.<service>.<namespace>') carry a mode.
+
+        Calls PATCH /v1/service/config with {"config": {"services": [...],
+        "policy_mode":...}}.
         """
         app = app_context(ctx)
-        payload: dict[str, Any] = {"config": {"name": group_name, "policy_mode": mode}}
+        if not group_name.startswith("nv."):
+            raise ValidationError_(
+                f"{group_name!r} is not a learned group. Policy mode is a property "
+                "of services (learned groups named 'nv.<service>.<namespace>'); "
+                "custom groups have no mode to set."
+            )
+        service = group_name[len("nv.") :]
+        payload: dict[str, Any] = {"config": {"services": [service], "policy_mode": mode}}
         namespace = group_name.split(".")[-1] if group_name.startswith("nv.") else None
 
         plan = authorise_write(
@@ -201,12 +213,12 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         if plan is not None:
             return plan
 
-        response = await app.client.request("PATCH", f"/v1/group/{group_name}", json=payload)
+        response = await app.client.request("PATCH", "/v1/service/config", json=payload)
         return WriteOutcome(
             status="applied",
             operation="nv_set_group_policy_mode",
             target=group_name,
-            effect=f"policy_mode of {group_name} set to {mode}",
+            effect=f"policy_mode of service {service!r} ({group_name}) set to {mode}",
             payload=payload,
             controller_response=response if isinstance(response, dict) else {},
         )

@@ -15,11 +15,11 @@ from neuvector_mcp.server import build_server
 
 pytestmark = pytest.mark.asyncio
 
-PATCH_GROUP = "/v1/group/nv.api.prod"
+PATCH_SERVICE_CONFIG = "/v1/service/config"
 
 
 async def test_first_call_returns_plan_and_sends_nothing(client, nv_mock: respx.MockRouter) -> None:
-    route = nv_mock.patch(PATCH_GROUP).respond(200, json={})
+    route = nv_mock.patch(PATCH_SERVICE_CONFIG).respond(200, json={})
     result = await client.call_tool(
         "nv_set_group_policy_mode", {"group_name": "nv.api.prod", "mode": "Protect"}
     )
@@ -31,7 +31,7 @@ async def test_first_call_returns_plan_and_sends_nothing(client, nv_mock: respx.
 
 
 async def test_confirmed_call_applies(client, nv_mock: respx.MockRouter) -> None:
-    route = nv_mock.patch(PATCH_GROUP).respond(200, json={})
+    route = nv_mock.patch(PATCH_SERVICE_CONFIG).respond(200, json={})
     args = {"group_name": "nv.api.prod", "mode": "Protect"}
     plan = await client.call_tool("nv_set_group_policy_mode", args)
     token = plan.structured_content["confirm_token"]
@@ -40,16 +40,28 @@ async def test_confirmed_call_applies(client, nv_mock: respx.MockRouter) -> None
     assert result.structured_content["status"] == "applied"
     assert route.call_count == 1
     assert json.loads(route.calls.last.request.read()) == {
-        "config": {"name": "nv.api.prod", "policy_mode": "Protect"}
+        "config": {"services": ["api.prod"], "policy_mode": "Protect"}
     }
 
 
+async def test_custom_group_is_rejected_without_controller_call(
+    client, nv_mock: respx.MockRouter
+) -> None:
+    route = nv_mock.patch(PATCH_SERVICE_CONFIG).respond(200, json={})
+    with pytest.raises(Exception) as excinfo:
+        await client.call_tool(
+            "nv_set_group_policy_mode", {"group_name": "custom-group", "mode": "Protect"}
+        )
+    assert "not a learned group" in str(excinfo.value)
+    assert route.call_count == 0
+
+
 async def test_token_is_bound_to_arguments(client, nv_mock: respx.MockRouter) -> None:
-    nv_mock.patch(PATCH_GROUP).respond(200, json={})
+    nv_mock.patch(PATCH_SERVICE_CONFIG).respond(200, json={})
     monitor_token = confirm_token(
         "nv_set_group_policy_mode",
         "nv.api.prod",
-        {"config": {"name": "nv.api.prod", "policy_mode": "Monitor"}},
+        {"config": {"services": ["api.prod"], "policy_mode": "Monitor"}},
     )
     with pytest.raises(Exception) as excinfo:
         await client.call_tool(
@@ -70,7 +82,7 @@ async def test_read_only_hides_mutating_toolsets(nv_mock: respx.MockRouter) -> N
 
 async def test_namespace_allowlist_blocks_outside_namespace(nv_mock: respx.MockRouter) -> None:
     server = build_server(make_settings(allowed_namespaces=("staging",)))
-    route = nv_mock.patch(PATCH_GROUP).respond(200, json={})
+    route = nv_mock.patch(PATCH_SERVICE_CONFIG).respond(200, json={})
     async with Client(server) as c:
         with pytest.raises(Exception) as excinfo:
             await c.call_tool(
