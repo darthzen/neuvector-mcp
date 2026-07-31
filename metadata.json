@@ -3,7 +3,7 @@
   "checkpoint_id": "01KYV6QEMMK9JGT2AVFEGTX66B",
   "strategy": "manual-commit",
   "branch": "build/phases-1-11",
-  "checkpoints_count": 12,
+  "checkpoints_count": 15,
   "files_touched": [
     "Makefile",
     "SPEC.md",
@@ -41,13 +41,20 @@
       "compact_transcript": "/2/transcript.jsonl",
       "content_hash": "/2/content_hash.txt",
       "prompt": "/2/prompt.txt"
+    },
+    {
+      "metadata": "/3/metadata.json",
+      "transcript": "/3/full.jsonl",
+      "compact_transcript": "/3/transcript.jsonl",
+      "content_hash": "/3/content_hash.txt",
+      "prompt": "/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 770,
-    "cache_creation_tokens": 476137,
-    "cache_read_tokens": 34108297,
-    "output_tokens": 207337,
-    "api_call_count": 258
+    "input_tokens": 826,
+    "cache_creation_tokens": 553979,
+    "cache_read_tokens": 36103472,
+    "output_tokens": 233373,
+    "api_call_count": 288
   }
 }

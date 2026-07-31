@@ -1,0 +1,9 @@
+Read your handoff and start testing the sensor writes
+
+---
+
+Reconnect is done.
+
+---
+
+Create a skill for checking a project on fossa, writing the sensor(s), and pushing them to neuvector. Call it `/fossa-protect`
