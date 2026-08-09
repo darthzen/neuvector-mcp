@@ -1,7 +1,7 @@
 .claude/
 .venv/
 __pycache__/
-.coverage
+.coverage*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
