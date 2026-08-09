@@ -206,6 +206,35 @@ async def test_delete_group_confirmed_calls_delete(client, nv_mock: respx.MockRo
     assert route.calls.last.request.read() == b"", "DELETE carries no body"
 
 
+async def test_delete_group_respects_allowed_namespaces(nv_mock: respx.MockRouter) -> None:
+    # S3: LEARNED_GROUP is nv.api.prod, so the namespace is 'prod'. Before this
+    # was wired, nv_delete_group passed no namespace and the setting was a no-op.
+    route = nv_mock.delete(f"/v1/group/{LEARNED_GROUP}").respond(200, json={})
+    server = build_server(make_settings(allowed_namespaces=("staging",)))
+    async with Client(server) as c:
+        with pytest.raises(Exception) as excinfo:
+            await c.call_tool("nv_delete_group", {"group_name": LEARNED_GROUP})
+
+    assert "prod" in str(excinfo.value)
+    assert route.call_count == 0, "the refusal must precede the controller call"
+
+
+async def test_delete_group_of_a_custom_group_is_not_namespace_scoped(
+    nv_mock: respx.MockRouter,
+) -> None:
+    # The fail-open half, asserted on purpose: a custom group's name carries no
+    # namespace, so NV_ALLOWED_NAMESPACES cannot scope it. See guard.authorise_write.
+    route = nv_mock.delete(GROUP_PATH).respond(200, json={})
+    server = build_server(make_settings(allowed_namespaces=("staging",)))
+    async with Client(server) as c:
+        preview = await c.call_tool("nv_delete_group", {"group_name": GROUP})
+        token = preview.structured_content["confirm_token"]
+        result = await c.call_tool("nv_delete_group", {"group_name": GROUP, "confirm": token})
+
+    assert result.structured_content["status"] == "applied"
+    assert route.call_count == 1
+
+
 # -- nv_apply_network_rule_changes ----------------------------------------------
 
 

@@ -117,6 +117,12 @@ def _auth_provider(settings: Settings) -> AuthProvider | None:
     stdio inherits the trust boundary of the parent process, so it carries no
     auth. HTTP is network-reachable and therefore MUST be authenticated: the
     server refuses to start on HTTP without at least one bearer token.
+
+    A token authenticates and does not authorise. Every accepted token reaches
+    the same tools, and what those tools may do is decided in one place -- the
+    role on the NeuVector API key, narrowed by ``NV_READ_ONLY``, ``NV_TOOLSETS``
+    and the confirmation handshake. Run a second server with its own key and its
+    own toolset list when two clients need different power.
     """
     if settings.transport != "http":
         return None
@@ -125,13 +131,13 @@ def _auth_provider(settings: Settings) -> AuthProvider | None:
 
         raise ConfigError(
             "NV_TRANSPORT=http requires NV_HTTP_BEARER_TOKENS "
-            "(format: 'token1:nv:read|nv:write,token2:nv:read'). "
+            "(format: 'token1,token2'). "
             "Refusing to expose an unauthenticated control plane."
         )
     return StaticTokenVerifier(
         tokens={
-            token: {"client_id": f"nv-mcp-{i}", "scopes": scopes}
-            for i, (token, scopes) in enumerate(settings.http_bearer_tokens.items())
+            token: {"client_id": f"nv-mcp-{i}"}
+            for i, token in enumerate(settings.http_bearer_tokens)
         }
     )
 

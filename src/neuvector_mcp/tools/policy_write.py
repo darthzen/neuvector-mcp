@@ -290,6 +290,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             effect=f"Delete group {group_name!r} and every rule that references it.",
             payload=None,
             confirm=confirm,
+            namespace=_namespace_from_group_name(group_name),
         )
         if plan is not None:
             return plan

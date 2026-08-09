@@ -20,6 +20,7 @@ from neuvector_mcp.config import (
     Settings,
     load_settings,
 )
+from neuvector_mcp.errors import ConfigError
 
 CONTROLLER = "https://nv-controller.test:10443"
 SECRET = "top-secret-value-9x"
@@ -74,7 +75,7 @@ def test_controller_url_must_have_scheme(monkeypatch: pytest.MonkeyPatch) -> Non
     set_minimal_env(monkeypatch)
     monkeypatch.setenv("NV_CONTROLLER_URL", "nv.example:10443")
 
-    with pytest.raises(ValidationError) as excinfo:
+    with pytest.raises(ConfigError) as excinfo:
         load_settings()
     assert "must start with http:// or https://" in str(excinfo.value)
 
@@ -99,7 +100,7 @@ def test_apikey_mode_requires_both_keys(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("NV_AUTH_MODE", "apikey")
     monkeypatch.setenv("NV_API_ACCESS_KEY", "acc")
 
-    with pytest.raises(ValidationError) as excinfo:
+    with pytest.raises(ConfigError) as excinfo:
         load_settings()
     assert "NV_API_ACCESS_KEY and NV_API_SECRET_KEY" in str(excinfo.value)
 
@@ -108,7 +109,7 @@ def test_password_mode_requires_username_and_password(monkeypatch: pytest.Monkey
     monkeypatch.setenv("NV_CONTROLLER_URL", CONTROLLER)
     monkeypatch.setenv("NV_AUTH_MODE", "password")
 
-    with pytest.raises(ValidationError) as excinfo:
+    with pytest.raises(ConfigError) as excinfo:
         load_settings()
     assert "NV_USERNAME and NV_PASSWORD" in str(excinfo.value)
 
@@ -170,7 +171,7 @@ def test_unknown_toolset_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     set_minimal_env(monkeypatch)
     monkeypatch.setenv("NV_TOOLSETS", "inventory,bogus")
 
-    with pytest.raises(ValidationError) as excinfo:
+    with pytest.raises(ConfigError) as excinfo:
         load_settings()
     message = str(excinfo.value)
     assert "bogus" in message
@@ -189,7 +190,7 @@ def test_read_only_conflicts_with_mutating_toolset(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("NV_READ_ONLY", "true")
     monkeypatch.setenv("NV_TOOLSETS", "policy_write")
 
-    with pytest.raises(ValidationError) as excinfo:
+    with pytest.raises(ConfigError) as excinfo:
         load_settings()
     message = str(excinfo.value)
     assert "policy_write" in message
@@ -269,11 +270,78 @@ def test_allowed_namespaces_split(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_http_bearer_tokens_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     set_minimal_env(monkeypatch)
-    monkeypatch.setenv("NV_HTTP_BEARER_TOKENS", "tok-a:nv:read|nv:write,tok-b")
+    monkeypatch.setenv("NV_HTTP_BEARER_TOKENS", " tok-a , tok-b ,")
 
-    tokens = load_settings().http_bearer_tokens
-    assert tokens["tok-a"] == ["nv:read", "nv:write"]
-    assert tokens["tok-b"] == ["nv:read"]
+    assert load_settings().http_bearer_tokens == ("tok-a", "tok-b")
+
+
+def test_http_bearer_token_scope_suffix_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The old '<token>:<scope>' form fails at startup rather than half-working.
+
+    Stripping the suffix silently would preserve the belief in a control that
+    never existed; keeping it would make the whole string the token and 401 every
+    request. Neither is a good failure, so this one is loud.
+    """
+    set_minimal_env(monkeypatch)
+    monkeypatch.setenv("NV_HTTP_BEARER_TOKENS", f"{SECRET}:nv:read,tok-b")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+
+    message = str(excinfo.value)
+    assert "no longer accepted" in message
+    assert SECRET not in message, "the error names the position, never the credential"
+
+
+# --- startup failures must not print credentials ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("env", "reason"),
+    [
+        ({"NV_TOOLSETS": "bogus"}, "unknown toolset"),
+        ({"NV_CONTROLLER_URL": "nv.example:10443"}, "bad URL scheme"),
+        ({"NV_READ_ONLY": "true", "NV_TOOLSETS": "policy_write"}, "read-only conflict"),
+        ({"NV_HTTP_BEARER_TOKENS": f"{SECRET}:nv:read"}, "scope suffix"),
+    ],
+)
+def test_no_startup_failure_prints_a_credential(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], reason: str
+) -> None:
+    """SPEC N8 on the startup path.
+
+    A raw pydantic ValidationError renders ``input_value``, and for this model
+    that is the whole settings dict -- NV_API_SECRET_KEY and NV_PASSWORD with it.
+    On the HTTP transport the message goes to stderr, into the pod log, and on to
+    whatever ships it. Every rejection route is checked, not just the one that
+    prompted the fix.
+    """
+    set_minimal_env(monkeypatch)
+    monkeypatch.setenv("NV_API_SECRET_KEY", SECRET)
+    monkeypatch.setenv("NV_AUTH_MODE", "apikey")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+
+    rendered = f"{excinfo.value!r} {excinfo.value!s} {excinfo.traceback!r}"
+    assert SECRET not in rendered, f"{reason} rejection leaked the secret key"
+    assert excinfo.value.__cause__ is None, "the chained ValidationError would reprint it"
+
+
+def test_password_is_not_printed_when_password_mode_is_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NV_CONTROLLER_URL", CONTROLLER)
+    monkeypatch.setenv("NV_AUTH_MODE", "password")
+    monkeypatch.setenv("NV_PASSWORD", SECRET)  # username deliberately absent
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+
+    assert "NV_USERNAME and NV_PASSWORD" in str(excinfo.value)
+    assert SECRET not in f"{excinfo.value!r} {excinfo.value!s}"
 
 
 # --- immutability and redaction ----------------------------------------------
@@ -299,7 +367,7 @@ def test_settings_reject_unknown_fields() -> None:
 def test_redacted_hides_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     set_minimal_env(monkeypatch)
     monkeypatch.setenv("NV_API_SECRET_KEY", SECRET)
-    monkeypatch.setenv("NV_HTTP_BEARER_TOKENS", f"{SECRET}:nv:read")
+    monkeypatch.setenv("NV_HTTP_BEARER_TOKENS", SECRET)
 
     settings = load_settings()
     redacted = settings.redacted()

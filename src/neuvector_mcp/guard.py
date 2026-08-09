@@ -66,7 +66,16 @@ def authorise_write(
         effect: One-sentence description of what will change, for the plan.
         payload: The exact body that will be sent to the controller.
         confirm: Token supplied by the caller, or ``None`` on the first call.
-        namespace: Namespace the change lands in, when the operation is scoped.
+        namespace: Namespace the change lands in, or ``None`` when the operation
+            cannot name one. **``None`` means the ``NV_ALLOWED_NAMESPACES``
+            check is skipped, not that it fails** — the setting is fail-open by
+            construction. It cannot be made fail-closed here: 49 of the 67 write
+            paths are cluster-scoped objects (registries, webhooks, sigstore,
+            all of ``iam_write``) or are addressed by an opaque rule id, so
+            refusing them whenever the setting is present would disable most of
+            the write surface rather than scope it. Pass a real namespace
+            wherever the tool holds one; see the README section "What
+            NV_ALLOWED_NAMESPACES does not cover".
 
     Returns:
         ``None`` when the caller may proceed, or a

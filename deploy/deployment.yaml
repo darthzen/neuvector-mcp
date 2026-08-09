@@ -24,8 +24,15 @@ stringData:
   secret-key: REPLACE_ME
 ---
 # Bearer tokens that MCP clients present. Format:
-#   <token>:<scope>|<scope>,<token2>:<scope>
+#   <token>,<token2>
 # Generate with: openssl rand -hex 32
+#
+# A token authenticates and does not authorise: every accepted token reaches the
+# same tools. Privilege comes from the role on the NeuVector API key above,
+# narrowed by NV_READ_ONLY and NV_TOOLSETS below. Two clients needing different
+# power means two Deployments with different API keys.
+#
+# A ':<scope>' suffix is a startup error. It used to be accepted and ignored.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -33,7 +40,7 @@ metadata:
   namespace: neuvector-mcp
 type: Opaque
 stringData:
-  bearer-tokens: "REPLACE_ME_32_BYTE_HEX:nv:read"
+  bearer-tokens: "REPLACE_ME_32_BYTE_HEX"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -150,7 +157,19 @@ spec:
       port: 8080
       targetPort: mcp
 ---
-# Egress to the controller and DNS only. Nothing else, in or out.
+# Egress to the controller and DNS only.
+#
+# Ingress is opt-in: a client reaches :8080 only from a namespace labelled
+# neuvector-mcp-client=true, or from a pod in THIS namespace carrying the same
+# label. Before this selector existed the rule had no 'from:' at all, which in
+# NetworkPolicy means every pod in the cluster, not "the ones that need it".
+#
+# If you swap in deploy/service-loadbalancer.yaml for off-cluster clients, this
+# rule blocks them: traffic arriving from outside the cluster matches no
+# namespaceSelector or podSelector. Add an ipBlock for the client CIDR to that
+# from: list. Do not delete the selector to make it work -- that reopens :8080
+# to every pod in the cluster, and the bearer token becomes the only thing
+# standing in front of the controller.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -162,7 +181,14 @@ spec:
       app.kubernetes.io/name: neuvector-mcp
   policyTypes: [Ingress, Egress]
   ingress:
-    - ports:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              neuvector-mcp-client: "true"
+        - podSelector:
+            matchLabels:
+              neuvector-mcp-client: "true"
+      ports:
         - port: 8080
           protocol: TCP
   egress:

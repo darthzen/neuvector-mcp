@@ -128,11 +128,20 @@ real ones; manage the two Secrets with SOPS or External Secrets instead.
 | Location | Replace with |
 |---|---|
 | `Secret/neuvector-mcp-controller` `access-key`, `secret-key` | The NeuVector API key pair — see [provisioning](#neuvector-api-key-provisioning) |
-| `Secret/neuvector-mcp-clients` `bearer-tokens` | `openssl rand -hex 32`, formatted `<token>:nv:read` |
+| `Secret/neuvector-mcp-clients` `bearer-tokens` | One or more `openssl rand -hex 32` values, comma-separated |
 | `Deployment` `image` | Your registry path |
 
-The bearer-token string is `token:scope|scope,token2:scope`. A token with no
-scope suffix defaults to `nv:read`.
+The bearer-token string is `token,token2`. **A token authenticates; it does not
+authorise.** Every accepted token reaches the same tools with the same power.
+What that power is comes from one place — the role on the NeuVector API key this
+server holds, narrowed by `NV_READ_ONLY`, `NV_TOOLSETS` and the confirmation
+handshake. To give two clients different power, run two servers with different
+API keys and different `NV_TOOLSETS`.
+
+> Earlier versions accepted a `<token>:<scope>` suffix. Those scopes were parsed
+> and never checked, so `token:nv:read` had exactly the write access of
+> `token:nv:write`. A suffixed token is now a **startup error** rather than a
+> control that quietly does nothing; drop the `:nv:read` and the value works.
 
 Check the `NetworkPolicy` egress selector against your cluster: it targets
 `kubernetes.io/metadata.name: cattle-neuvector-system` on port 10443. If
@@ -164,9 +173,39 @@ For MCP clients outside the cluster, apply `deploy/service-loadbalancer.yaml`
 **instead of** the ClusterIP Service in `deployment.yaml` — both use the name
 `neuvector-mcp`. It carries a MetalLB annotation for a fixed address; other
 LoadBalancer implementations spell that differently, and omitting it lets the
-controller pick. The `NetworkPolicy` needs no change: its ingress rule has no
-`from` selector, so off-cluster sources on port 8080 are already admitted, and
-the bearer token is what actually authorises them.
+controller pick.
+
+**The `NetworkPolicy` does need a change for this.** Its ingress rule admits
+only namespaces and pods labelled `neuvector-mcp-client=true`, and traffic from
+outside the cluster matches neither selector, so an off-cluster client is
+dropped before the bearer token is ever read. Add an `ipBlock` for the client's
+CIDR to the `from:` list:
+
+```yaml
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              neuvector-mcp-client: "true"
+        - podSelector:
+            matchLabels:
+              neuvector-mcp-client: "true"
+        - ipBlock:
+            cidr: 100.64.0.0/10   # the range your clients actually come from
+      ports:
+        - port: 8080
+          protocol: TCP
+```
+
+Deleting the `from:` block also "works", and is the wrong fix — an ingress rule
+with no `from:` admits every pod in the cluster, leaving the bearer token as the
+only thing in front of the controller.
+
+For in-cluster clients, label the calling namespace instead:
+
+```bash
+kubectl label namespace <client-namespace> neuvector-mcp-client=true
+```
 
 ### 4. Point a client at it
 
@@ -199,11 +238,11 @@ Secrets can be mounted rather than injected.
 | `NV_HTTP_HOST` | `0.0.0.0` | HTTP transport bind address. |
 | `NV_HTTP_PORT` | `8080` | HTTP transport bind port. |
 | `NV_HTTP_PATH` | `/mcp` | HTTP transport request path. |
-| `NV_HTTP_BEARER_TOKENS` | — | **Required for `http`.** `token:scope\|scope,token2:scope`. Startup fails without it on HTTP. |
+| `NV_HTTP_BEARER_TOKENS` | — | **Required for `http`.** `token,token2`. Authenticates only; carries no privilege. Startup fails without it on HTTP, and fails on a legacy `:scope` suffix. |
 | `NV_READ_ONLY` | `true` | `true` refuses every mutation and does not register mutating toolsets at all. |
 | `NV_TOOLSETS` | the six read toolsets | Comma-separated list; see [Toolsets](#toolsets). |
 | `NV_REQUIRE_CONFIRM_TOKEN` | `true` | `false` removes the two-step handshake. Only for automation that has its own approval gate. |
-| `NV_ALLOWED_NAMESPACES` | — | When set, mutations targeting a namespace outside this list are refused. |
+| `NV_ALLOWED_NAMESPACES` | — | When set, refuses the mutations that name a namespace. Covers 18 of the 67 write paths; see [What `NV_ALLOWED_NAMESPACES` does not cover](#what-nv_allowed_namespaces-does-not-cover). |
 | `NV_ALLOW_UNDOCUMENTED` | `false` | Gates tools that use routes absent from the controller's Swagger. |
 | `NV_MAX_ITEMS` | `200` | Hard cap on any list tool's page size. |
 | `NV_MAX_RESPONSE_CHARS` | `60000` | Truncation budget per tool result. Truncated results set `truncated=true`. |
@@ -267,6 +306,30 @@ Five independent layers. A mutation must clear all five.
 
 Layer 2 is the one that actually protects the cluster. The other four protect
 against model error, not against a compromised credential.
+
+### What `NV_ALLOWED_NAMESPACES` does not cover
+
+`NV_ALLOWED_NAMESPACES` is deliberately absent from the five layers above. It is
+a **narrowing hint, not a boundary**, and it is fail-open by construction: the
+check runs only when the tool can name the namespace its change lands in.
+
+Of the 67 mutating call paths, **18 name a namespace and are checked**; the
+other 49 pass none and are unaffected by the setting. The uncovered set is not
+an oversight — most of those writes have no namespace to name:
+
+- **Genuinely cluster-wide objects.** Registries, sigstore roots and verifiers,
+  webhooks, DLP and WAF *sensors*, system and scan config, admission rules,
+  compliance profiles. These exist once per cluster.
+- **All of `iam_write`.** Users, roles and API keys are cluster identities.
+- **Writes addressed by opaque id.** A network rule id, a response rule id or a
+  packet-capture id carries no namespace, and resolving one would cost a read
+  per call that the guard deliberately does not make.
+
+So `NV_ALLOWED_NAMESPACES=prod` stops a group, workload or service write landing
+in `staging`. It does **not** stop `nv_delete_registry`, `nv_create_api_key` or
+`nv_update_system_config`. Use `NV_TOOLSETS` to remove the toolsets a client has
+no business calling, and provision the API key's NeuVector role to match — those
+are the controls that hold.
 
 ---
 
