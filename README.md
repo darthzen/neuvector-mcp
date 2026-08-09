@@ -175,27 +175,21 @@ For MCP clients outside the cluster, apply `deploy/service-loadbalancer.yaml`
 LoadBalancer implementations spell that differently, and omitting it lets the
 controller pick.
 
-**The `NetworkPolicy` does need a change for this.** Its ingress rule admits
-only namespaces and pods labelled `neuvector-mcp-client=true`, and traffic from
-outside the cluster matches neither selector, so an off-cluster client is
-dropped before the bearer token is ever read. Add an `ipBlock` for the client's
-CIDR to the `from:` list:
+**The `NetworkPolicy` needs its `ipBlock` set to your client range.** The
+ingress rule admits namespaces and pods labelled `neuvector-mcp-client=true`,
+and traffic from outside the cluster matches neither selector — so off-cluster
+clients get in via the `ipBlock`, which ships set to `192.168.7.0/24` because
+that is the range verified against the ash4d cluster. Change it to yours.
 
-```yaml
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              neuvector-mcp-client: "true"
-        - podSelector:
-            matchLabels:
-              neuvector-mcp-client: "true"
-        - ipBlock:
-            cidr: 100.64.0.0/10   # the range your clients actually come from
-      ports:
-        - port: 8080
-          protocol: TCP
-```
+**Use the client's real address, not the one the pod logs.** With
+`externalTrafficPolicy: Cluster` the application sees every external client as
+the cni0 gateway (`10.42.0.1`) because kube-proxy masquerades in `POSTROUTING`,
+which runs *after* the filter chain where NetworkPolicy is evaluated. An
+`ipBlock` of `10.42.0.1/32` matches nothing and locks out every client — this
+was tried, and it did exactly that. The policy sees the pre-SNAT source.
+
+The kubelet's `tcpSocket` probes need no entry of their own: they source from
+the node's `InternalIP`, which is already inside a LAN CIDR.
 
 Deleting the `from:` block also "works", and is the wrong fix — an ingress rule
 with no `from:` admits every pod in the cluster, leaving the bearer token as the
@@ -206,6 +200,12 @@ For in-cluster clients, label the calling namespace instead:
 ```bash
 kubectl label namespace <client-namespace> neuvector-mcp-client=true
 ```
+
+Give the policy controller a moment after labelling. It admits a source by pod
+IP, and a pod that issues its first request within a second of being scheduled
+can be refused simply because its IP is not indexed yet. A short-lived
+`kubectl run --rm` probe hits this reliably and reads as "the selector does not
+work"; a settled pod does not.
 
 ### 4. Point a client at it
 
