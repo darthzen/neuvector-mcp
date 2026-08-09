@@ -1,0 +1,13 @@
+Are we all committed and pushed?
+
+---
+
+Submit the PRs
+
+---
+
+Merged.
+
+---
+
+Bump, build, and push the image
