@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZJ9YVB2ECKSW215G5Z6QGF2",
+  "session_id": "a69ac9b0-eec6-4273-88f3-0ca8566ca3f9",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-09T03:44:50.934546Z",
+  "branch": "fix/security-audit-findings",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "deploy/deployment.yaml",
+    "README.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "238ad6515379",
+  "checkpoint_transcript_start": 366,
+  "transcript_lines_at_start": 366,
+  "compact_transcript_start": 96,
+  "token_usage": {
+    "input_tokens": 83,
+    "cache_creation_tokens": 47447,
+    "cache_read_tokens": 7976973,
+    "output_tokens": 38634,
+    "api_call_count": 45
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-09T03:44:50.88237Z",
+    "agent_lines": 43,
+    "agent_removed": 26,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 43,
+    "total_lines_changed": 69,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
