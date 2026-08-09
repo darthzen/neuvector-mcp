@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZJ8VE6ZKKRYMHXWAPC0CKK6",
+  "strategy": "manual-commit",
+  "branch": "fix/security-audit-findings",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "README.md",
+    "deploy/deployment.yaml",
+    "src/neuvector_mcp/client.py",
+    "src/neuvector_mcp/config.py",
+    "src/neuvector_mcp/server.py",
+    "tests/test_config.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 225,
+    "cache_creation_tokens": 509032,
+    "cache_read_tokens": 20550973,
+    "output_tokens": 93865,
+    "api_call_count": 120
+  }
+}
