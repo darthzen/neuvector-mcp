@@ -7,6 +7,7 @@ These pin `client.py` (SPEC 7.2, appendix D). Every request is served by
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -416,6 +417,93 @@ async def test_timeout_is_retried_then_surfaces_as_upstream_error(
     assert sleeps == [0.5, 1.0]
 
 
+# --- retry is a GET-only budget -------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
+async def test_write_is_never_retried_on_transient_status(
+    router: respx.MockRouter,
+    make_client: Callable[..., NeuVectorClient],
+    sleeps: list[float],
+    method: str,
+    status: int,
+) -> None:
+    """A 502/504 can arrive after the controller accepted the write."""
+    route = router.request(method, "/v1/group").respond(status)
+
+    with pytest.raises(UpstreamError):
+        await make_client().request(method, "/v1/group", json={"config": {"name": "g"}})
+
+    assert route.call_count == 1, "a failed write must be sent exactly once"
+    assert sleeps == []
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
+async def test_write_is_never_retried_on_fail_write_cluster(
+    router: respx.MockRouter,
+    make_client: Callable[..., NeuVectorClient],
+    sleeps: list[float],
+    method: str,
+) -> None:
+    """`ERR_FAIL_WRITE_CLUSTER` (8) is retryable for a read, not for a write."""
+    route = router.request(method, "/v1/group").respond(
+        500, json={"code": 8, "error": "failed to write to the cluster"}
+    )
+
+    with pytest.raises(NeuVectorMCPError):
+        await make_client().request(method, "/v1/group", json={"config": {"name": "g"}})
+
+    assert route.call_count == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
+async def test_write_is_never_retried_on_transport_error(
+    router: respx.MockRouter,
+    make_client: Callable[..., NeuVectorClient],
+    sleeps: list[float],
+    method: str,
+) -> None:
+    """A dropped connection says nothing about whether the write landed."""
+    route = router.request(method, "/v1/group").mock(side_effect=httpx.ReadTimeout("timed out"))
+
+    with pytest.raises(UpstreamError):
+        await make_client().request(method, "/v1/group", json={"config": {"name": "g"}})
+
+    assert route.call_count == 1
+    assert sleeps == []
+
+
+async def test_write_retries_when_the_caller_opts_in(
+    router: respx.MockRouter,
+    make_client: Callable[..., NeuVectorClient],
+    sleeps: list[float],
+) -> None:
+    route = router.post("/v1/group").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json={})]
+    )
+
+    await make_client().request("POST", "/v1/group", json={}, retry=True)
+
+    assert route.call_count == 2
+    assert sleeps == [0.5]
+
+
+async def test_get_retry_can_be_opted_out(
+    router: respx.MockRouter,
+    make_client: Callable[..., NeuVectorClient],
+    sleeps: list[float],
+) -> None:
+    route = router.get("/v1/host").respond(503)
+
+    with pytest.raises(UpstreamError):
+        await make_client().request("GET", "/v1/host", retry=False)
+
+    assert route.call_count == 1
+    assert sleeps == []
+
+
 # --- re-login -----------------------------------------------------------------
 
 
@@ -459,6 +547,48 @@ async def test_no_relogin_loop(
     assert auth_route.call_count == 1, "never a second re-login"
     assert route.call_count == 2
     assert sleeps == []
+
+
+async def test_concurrent_401s_cause_exactly_one_relogin(
+    router: respx.MockRouter,
+    make_client: Callable[..., NeuVectorClient],
+) -> None:
+    """P2: N callers hitting an expired session must not post N logins.
+
+    Without the double-check inside ``_login_lock`` every waiter re-logs in
+    after the winner releases it, burning N-1 sessions and risking the
+    controller's ERR_TOO_MANY_LOGIN_USER.
+
+    Deliberately does not take the ``sleeps`` fixture: it patches ``sleep`` on
+    the shared ``asyncio`` module, which would neuter the yield below. Nothing
+    here retries, so there is no backoff to suppress.
+    """
+
+    # respx answers instantly, so a plain mock lets the first caller run start to
+    # finish before the second one starts and the race never happens. Suspending
+    # inside POST /v1/auth is what puts the other nine on the lock together.
+    async def _slow_auth(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0)
+        return httpx.Response(200, json={"token": {"token": "fresh-token", "fullname": "admin"}})
+
+    auth_route = router.post("/v1/auth").mock(side_effect=_slow_auth)
+
+    def _expired_until_relogin(request: httpx.Request) -> httpx.Response:
+        if request.headers.get(TOKEN_HEADER) == "fresh-token":
+            return httpx.Response(200, json={"hosts": []})
+        return httpx.Response(401, json={"code": 3, "error": "Authentication failed"})
+
+    route = router.get("/v1/host").mock(side_effect=_expired_until_relogin)
+
+    client = make_client(**PASSWORD_MODE)
+    # An already-established session that the controller has since expired: all
+    # ten callers send the stale token and all ten get a 401.
+    client._token = "stale-token"
+    results = await asyncio.gather(*(client.request("GET", "/v1/host") for _ in range(10)))
+
+    assert results == [{"hosts": []}] * 10, "every caller still gets its answer"
+    assert auth_route.call_count == 1, "P2: one re-login for ten concurrent 401s"
+    assert route.call_count == 20, "each caller: the 401, then one retry"
 
 
 async def test_no_relogin_in_apikey_mode(

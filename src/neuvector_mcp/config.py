@@ -4,7 +4,13 @@ All configuration is supplied through environment variables prefixed ``NV_``.
 Nothing is read from the filesystem except the optional ``*_FILE`` indirections,
 which exist so Kubernetes Secrets can be mounted as files instead of env vars.
 
-This module has no dependencies on any other module in this package.
+This module's only dependency inside the package is :class:`~.errors.ConfigError`,
+imported inside :func:`load_settings` so the module still imports standalone.
+
+**Never let a raw pydantic ValidationError out of here.** Its rendering includes
+``input_value``, which for this model is the whole settings dict -- API secret
+key and password included. :func:`load_settings` re-raises with the inputs
+stripped, which is what keeps SPEC rule N8 true on the startup path.
 """
 
 from __future__ import annotations
@@ -13,7 +19,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 Transport = Literal["stdio", "http"]
 AuthMode = Literal["apikey", "password"]
@@ -116,7 +122,13 @@ class Settings(BaseModel):
     http_host: str = "0.0.0.0"
     http_port: int = 8080
     http_path: str = "/mcp"
-    http_bearer_tokens: dict[str, list[str]] = Field(default_factory=dict)
+    #: Bearer tokens accepted on the HTTP transport. A token is a credential and
+    #: nothing more: it decides WHETHER a caller reaches the server, never WHAT
+    #: they may do once through. What they may do comes from the role on the
+    #: NeuVector API key this process holds, narrowed by NV_READ_ONLY,
+    #: NV_TOOLSETS and the confirmation handshake. Keeping privilege in one place
+    #: is deliberate -- a second, unconnected scope check is a debugging trap.
+    http_bearer_tokens: tuple[str, ...] = ()
 
     # --- safety ----------------------------------------------------------------
     read_only: bool = True
@@ -140,6 +152,35 @@ class Settings(BaseModel):
         if not v.startswith(("http://", "https://")):
             raise ValueError("NV_CONTROLLER_URL must start with http:// or https://")
         return v.rstrip("/")
+
+    @field_validator("http_bearer_tokens")
+    @classmethod
+    def _plain_tokens(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject the old ``<token>:<scope>|<scope>`` form loudly.
+
+        Those scopes were parsed, handed to the token verifier and then never
+        read by anything, so ``token:nv:read`` and ``token:nv:write`` granted
+        identical access. Silently stripping the suffix would keep an operator
+        believing in a control that does not exist; silently keeping it would
+        make the whole entry the token and answer every request with 401. Fail
+        at startup instead, and name the position rather than the value -- the
+        value is a credential and this message goes to stderr.
+        """
+        suffixed = [i for i, token in enumerate(v, start=1) if ":" in token]
+        if suffixed:
+            where = (
+                f"entry {suffixed[0]} contains"
+                if len(suffixed) == 1
+                else f"entries {', '.join(str(i) for i in suffixed)} contain"
+            )
+            raise ValueError(
+                f"NV_HTTP_BEARER_TOKENS {where} ':'. Scope suffixes are no longer "
+                "accepted: they were never enforced, so 'token:nv:read' had exactly the "
+                "write access of 'token:nv:write'. Privilege comes from the role on the "
+                "NeuVector API key, narrowed by NV_READ_ONLY and NV_TOOLSETS. Set this to "
+                "a bare comma-separated token list, e.g. 'tok-a,tok-b'."
+            )
+        return v
 
     @field_validator("toolsets")
     @classmethod
@@ -193,8 +234,16 @@ def load_settings() -> Settings:
     """Build :class:`Settings` from the process environment.
 
     Raises:
-        pydantic.ValidationError: if the environment is incomplete or contradictory.
+        ConfigError: if the environment is incomplete or contradictory. The
+            message carries every failing field and its reason, and none of the
+            values: pydantic renders ``input_value`` into an unhandled
+            ``ValidationError``, and for this model that dict holds
+            ``NV_API_SECRET_KEY`` and ``NV_PASSWORD``. On the HTTP transport
+            that string goes to stderr, into the pod log, and onward to whatever
+            ships it.
     """
+    from .errors import ConfigError
+
     toolsets_raw = _env("TOOLSETS")
     toolsets = (
         tuple(t.strip() for t in toolsets_raw.split(",") if t.strip())
@@ -203,40 +252,43 @@ def load_settings() -> Settings:
     )
 
     tokens_raw = _env("HTTP_BEARER_TOKENS", "")
-    bearer: dict[str, list[str]] = {}
-    for entry in (tokens_raw or "").split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        token, _, scopes = entry.partition(":")
-        bearer[token] = [s for s in scopes.split("|") if s] or ["nv:read"]
+    bearer = tuple(t.strip() for t in (tokens_raw or "").split(",") if t.strip())
 
-    return Settings(
-        controller_url=_env("CONTROLLER_URL", "https://127.0.0.1:10443") or "",
-        verify_tls=_env_bool("VERIFY_TLS", True),
-        ca_bundle=_env("CA_BUNDLE"),
-        request_timeout_s=float(_env("REQUEST_TIMEOUT_S", "30") or 30),
-        long_request_timeout_s=float(_env("LONG_REQUEST_TIMEOUT_S", "300") or 300),
-        auth_mode=_env("AUTH_MODE", "apikey"),  # type: ignore[arg-type]
-        api_access_key=_env("API_ACCESS_KEY"),
-        api_secret_key=_env("API_SECRET_KEY"),
-        username=_env("USERNAME"),
-        password=_env("PASSWORD"),
-        transport=_env("TRANSPORT", "stdio"),  # type: ignore[arg-type]
-        http_host=_env("HTTP_HOST", "0.0.0.0") or "0.0.0.0",
-        http_port=_env_int("HTTP_PORT", 8080),
-        http_path=_env("HTTP_PATH", "/mcp") or "/mcp",
-        http_bearer_tokens=bearer,
-        read_only=_env_bool("READ_ONLY", True),
-        toolsets=toolsets,
-        require_confirm_token=_env_bool("REQUIRE_CONFIRM_TOKEN", True),
-        allow_undocumented=_env_bool("ALLOW_UNDOCUMENTED", False),
-        allowed_namespaces=tuple(
-            n.strip() for n in (_env("ALLOWED_NAMESPACES", "") or "").split(",") if n.strip()
-        ),
-        max_items=_env_int("MAX_ITEMS", 200),
-        max_response_chars=_env_int("MAX_RESPONSE_CHARS", 60_000),
-        log_level=(_env("LOG_LEVEL", "INFO") or "INFO").upper(),
-        log_format=_env("LOG_FORMAT", "json"),  # type: ignore[arg-type]
-        audit_log_path=_env("AUDIT_LOG_PATH"),
-    )
+    try:
+        return Settings(
+            controller_url=_env("CONTROLLER_URL", "https://127.0.0.1:10443") or "",
+            verify_tls=_env_bool("VERIFY_TLS", True),
+            ca_bundle=_env("CA_BUNDLE"),
+            request_timeout_s=float(_env("REQUEST_TIMEOUT_S", "30") or 30),
+            long_request_timeout_s=float(_env("LONG_REQUEST_TIMEOUT_S", "300") or 300),
+            auth_mode=_env("AUTH_MODE", "apikey"),  # type: ignore[arg-type]
+            api_access_key=_env("API_ACCESS_KEY"),
+            api_secret_key=_env("API_SECRET_KEY"),
+            username=_env("USERNAME"),
+            password=_env("PASSWORD"),
+            transport=_env("TRANSPORT", "stdio"),  # type: ignore[arg-type]
+            http_host=_env("HTTP_HOST", "0.0.0.0") or "0.0.0.0",
+            http_port=_env_int("HTTP_PORT", 8080),
+            http_path=_env("HTTP_PATH", "/mcp") or "/mcp",
+            http_bearer_tokens=bearer,
+            read_only=_env_bool("READ_ONLY", True),
+            toolsets=toolsets,
+            require_confirm_token=_env_bool("REQUIRE_CONFIRM_TOKEN", True),
+            allow_undocumented=_env_bool("ALLOW_UNDOCUMENTED", False),
+            allowed_namespaces=tuple(
+                n.strip() for n in (_env("ALLOWED_NAMESPACES", "") or "").split(",") if n.strip()
+            ),
+            max_items=_env_int("MAX_ITEMS", 200),
+            max_response_chars=_env_int("MAX_RESPONSE_CHARS", 60_000),
+            log_level=(_env("LOG_LEVEL", "INFO") or "INFO").upper(),
+            log_format=_env("LOG_FORMAT", "json"),  # type: ignore[arg-type]
+            audit_log_path=_env("AUDIT_LOG_PATH"),
+        )
+    except ValidationError as exc:
+        # include_input=False is the whole point: the default rendering embeds the
+        # settings dict, secret key and password included.
+        faults = "; ".join(
+            f"{'.'.join(str(part) for part in err['loc']) or 'settings'}: {err['msg']}"
+            for err in exc.errors(include_input=False, include_url=False)
+        )
+        raise ConfigError(f"invalid NV_* environment: {faults}") from None

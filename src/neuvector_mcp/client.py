@@ -6,6 +6,7 @@ Responsibilities, and nothing else:
 * attach the correct auth header on every request
 * re-login exactly once when the controller rejects a session token
 * apply the NeuVector query conventions (``start``/``limit``/``f_*``/``s_*``)
+* refuse to send a path that escapes the endpoint the caller named
 * convert non-2xx responses into typed exceptions from :mod:`.errors`
 * never log a secret
 
@@ -21,15 +22,24 @@ The controller checks ``X-Auth-Token`` first and only falls back to
 from __future__ import annotations
 
 import asyncio
+import re
 import ssl
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
+from urllib.parse import unquote
 
 import httpx
 import structlog
 
 from .config import Settings
-from .errors import AuthError, NeuVectorMCPError, UpstreamError, classify, is_retryable
+from .errors import (
+    AuthError,
+    NeuVectorMCPError,
+    UpstreamError,
+    ValidationError_,
+    classify,
+    is_retryable,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -44,6 +54,69 @@ _TOKEN_HEADER = "X-Auth-Token"
 _APIKEY_HEADER = "X-Auth-Apikey"
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_S = 0.5
+
+#: Characters permitted in an assembled controller path. Every tool builds its
+#: path by interpolating a caller-supplied object name into an f-string, e.g.
+#: ``f"/v1/group/{group_name}"``. This is the unreserved set plus the sub-delims
+#: and ``%``, and deliberately excludes ``?``, ``#``, backslash, whitespace and
+#: control characters -- the delimiters that let a name change which endpoint,
+#: or which query, the request lands on.
+_SAFE_PATH = re.compile(r"^/v[12]/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$")
+
+
+def validate_path(path: str) -> str:
+    """Refuse a controller path that escapes the endpoint the tool named.
+
+    ``httpx`` resolves ``..`` against the base URL before the request goes out,
+    so an unvalidated object name is an endpoint selector::
+
+        f"/v1/group/{group_name}" with group_name="../../v1/system/config"
+        -> https://controller:10443/v1/system/config
+
+    That defeats both the read-only flag and ``NV_TOOLSETS``, which gate which
+    *tools* exist rather than which *endpoints* are reachable. It also defeats
+    ``NV_ALLOWED_NAMESPACES``, and the confirmation token is derived from the
+    same unvalidated string, so the handshake authorises the escape.
+
+    Percent-encoded traversal is rejected too: ``httpx`` forwards ``%2e%2e``
+    untouched and the controller is the one that decodes it, so the check runs
+    against both the literal path and its decoded form.
+
+    Args:
+        path: The assembled path, e.g. ``"/v1/group/nv.api.prod"``.
+
+    Returns:
+        ``path`` unchanged. Legitimate names -- including the dots in
+        ``nv.api.prod``, the colon in ``sha256:aaa111`` and the slash in a
+        repository like ``library/api`` -- pass through byte-for-byte.
+
+    Known limit, deliberate: ``/`` stays legal, because a registry image id IS a
+    repository path (``GET /v1/scan/registry/{name}/image/{id}`` with
+    ``id="library/api:1.4.2"``). So a name containing ``/`` can still select a
+    DEEPER route under the same prefix -- ``nv_delete_registry("reg/scan")``
+    reaches ``DELETE /v1/scan/registry/reg/scan`` instead of
+    ``DELETE /v1/scan/registry/reg``. That cannot escalate: reaching a
+    higher-privilege route means going UP the tree, which needs ``..``, and
+    ``..`` is refused. The cost is a mislabelled plan, not a wider blast radius.
+
+    Raises:
+        ValidationError_: if the path is malformed or contains a traversal
+            segment. Nothing is sent to the controller.
+    """
+    if not _SAFE_PATH.match(path):
+        raise ValidationError_(
+            f"refusing to send controller path {path!r}: it is not a well-formed "
+            "/v1 or /v2 path, or an argument contained a URL delimiter such as "
+            "'?', '#' or whitespace. Nothing was sent to the controller."
+        )
+    for candidate in (path, unquote(path)):
+        if any(segment in ("..", ".") for segment in candidate.split("/")):
+            raise ValidationError_(
+                f"refusing to send controller path {path!r}: an argument contains a "
+                "path traversal segment, which would redirect this call to a "
+                "different controller endpoint. Nothing was sent to the controller."
+            )
+    return path
 
 
 def build_query(
@@ -203,6 +276,7 @@ class NeuVectorClient:
         json: Any | None = None,
         timeout_s: float | None = None,
         authenticated: bool = True,
+        retry: bool | None = None,
         _relogin_done: bool = False,
     ) -> Any:
         """Perform one controller call and return the parsed JSON body.
@@ -215,6 +289,13 @@ class NeuVectorClient:
             timeout_s: Per-call override; use
                 ``settings.long_request_timeout_s`` for scan and bench calls.
             authenticated: Set ``False`` only for ``POST /v1/auth``.
+            retry: Whether a transient failure may be re-sent. ``None`` means
+                "retry ``GET`` only", which is the right answer for every
+                current caller. A non-``GET`` retry can duplicate a write: a
+                ``502``/``504`` or ``ERR_FAIL_WRITE_CLUSTER`` is returned after
+                the controller has already accepted the request often enough
+                that re-sending a ``POST`` risks a second object. Pass ``True``
+                only for a write the controller treats as idempotent.
             _relogin_done: Internal recursion guard.
 
         Returns:
@@ -222,9 +303,12 @@ class NeuVectorClient:
             (common for ``PATCH``/``DELETE``).
 
         Raises:
+            ValidationError_: if ``path`` escapes the endpoint the tool named.
             NeuVectorMCPError: for every non-2xx response, already classified.
         """
+        validate_path(path)
         headers = self._auth_headers() if authenticated else {}
+        may_retry = method == "GET" if retry is None else retry
         attempt = 0
         last_exc: NeuVectorMCPError | None = None
 
@@ -252,8 +336,17 @@ class NeuVectorClient:
                     and self._s.auth_mode == "password"
                     and not _relogin_done
                 ):
+                    # Snapshot before contending for the lock. N concurrent 401s
+                    # all queue here; without this check every one of them posts
+                    # its own /v1/auth, which burns N-1 sessions for nothing and
+                    # can trip the controller's ERR_TOO_MANY_LOGIN_USER. Whoever
+                    # wins the lock re-logs in; the rest find a fresh token and
+                    # go straight to the retry below, which rebuilds its headers
+                    # from self._token and so picks the new one up.
+                    stale_token = self._token
                     async with self._login_lock:
-                        await self.login()
+                        if self._token == stale_token:
+                            await self.login()
                     return await self.request(
                         method,
                         path,
@@ -261,12 +354,15 @@ class NeuVectorClient:
                         json=json,
                         timeout_s=timeout_s,
                         authenticated=authenticated,
+                        retry=retry,
                         _relogin_done=True,
                     )
                 if not is_retryable(response.status_code, body):
                     raise classify(response.status_code, body)
                 last_exc = classify(response.status_code, body)
 
+            if not may_retry:
+                raise last_exc
             if attempt < _MAX_ATTEMPTS:
                 await asyncio.sleep(_BACKOFF_BASE_S * (2 ** (attempt - 1)))
 
