@@ -454,3 +454,33 @@ async def test_network_conversations_blocked_when_undocumented_denied(
         await client.call_tool("nv_get_network_conversations", {})
     assert route.call_count == 0, "the guard must fire before any network call"
     assert "NV_ALLOW_UNDOCUMENTED" in str(excinfo.value)
+
+
+async def test_system_config_scope_and_safe_projection(client, nv_mock):
+    route = nv_mock.get("/v2/system/config").respond(
+        200,
+        json={
+            "config": {
+                "new_svc": {
+                    "new_service_policy_mode": "Monitor",
+                    "new_service_profile_mode": "Discover",
+                    "password": "hidden",
+                },
+                "net_svc": {"strict_group_mode": True, "net_service_status": False},
+                "mode_auto": {"mode_auto_d2m": False, "mode_auto_m2p": True},
+                "webhooks": [{"url": "hidden", "headers": {"Authorization": "hidden"}}],
+                "proxy": {"password": "hidden"},
+                "auth": {"secret": "hidden"},
+            },
+            "fed_config": {"webhooks": [{"url": "hidden"}]},
+        },
+    )
+    local = await client.call_tool("nv_get_system_config", {"scope": "local"})
+    assert route.calls.last.request.url.params["scope"] == "local"
+    assert local.data["new_svc"]["new_service_profile_mode"] == "Discover"
+    assert local.data["net_svc"]["strict_group_mode"] is True
+    assert local.data["mode_auto"]["mode_auto_m2p"] is True
+    assert "hidden" not in str(local.data)
+    fed = await client.call_tool("nv_get_system_config", {"scope": "fed"})
+    assert route.calls.last.request.url.params["scope"] == "fed"
+    assert fed.structured_content == {}
