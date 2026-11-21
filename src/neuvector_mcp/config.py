@@ -28,6 +28,7 @@ AuthMode = Literal["apikey", "password"]
 ALL_TOOLSETS: tuple[str, ...] = (
     # read-only toolsets
     "inventory",
+    "federation_read",
     "vulnerability",
     "compliance",
     "events",
