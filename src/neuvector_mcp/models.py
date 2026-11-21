@@ -1570,6 +1570,10 @@ class SecurityEvent(BaseModel):
 
     model_config = _BASE
 
+    cluster_name: str = Field(
+        default="", description="Cluster that reported the event, when provided."
+    )
+    cluster_id: str = Field(default="", description="Cluster id, when provided by the controller.")
     kind: EventKind = Field(description="Which log this came from.")
     id: str = Field(
         default="", description="Event id. For kind='threat' pass to nv_get_threat_detail."
@@ -1639,6 +1643,8 @@ class SecurityEvent(BaseModel):
         """
         common: dict[str, Any] = {
             "kind": kind,
+            "cluster_name": str(raw.get("cluster_name", "") or ""),
+            "cluster_id": str(raw.get("cluster_id", "") or ""),
             "id": str(raw.get("id", "") or ""),
             "name": str(raw.get("name", "") or ""),
             "level": str(raw.get("level", "") or ""),

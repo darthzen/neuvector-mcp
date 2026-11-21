@@ -399,3 +399,23 @@ async def test_events_tools_take_no_confirm_argument(client) -> None:
     ):
         assert tools[name].annotations.readOnlyHint is True
         assert "confirm" not in (tools[name].inputSchema.get("properties") or {}), name
+
+
+@pytest.mark.parametrize(
+    "kind,envelope", [("threat", "threats"), ("violation", "violations"), ("incident", "incidents")]
+)
+async def test_security_events_keep_cluster_attribution(client, nv_mock, kind, envelope):
+    nv_mock.get(f"/v1/log/{kind}").respond(
+        200,
+        json={
+            envelope: [
+                {"id": "event-a", "cluster_name": "cluster-a", "cluster_id": "id-a"},
+                {"id": "event-b"},
+            ]
+        },
+    )
+    result = await client.call_tool("nv_query_security_events", {"kind": kind})
+    assert result.data.events[0].cluster_name == "cluster-a"
+    assert result.data.events[0].cluster_id == "id-a"
+    assert result.data.events[1].cluster_name == ""
+    assert result.data.events[1].cluster_id == ""
