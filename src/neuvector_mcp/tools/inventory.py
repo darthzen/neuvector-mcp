@@ -12,7 +12,7 @@ toolset is absent from ``tools/list`` rather than present-and-failing.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
@@ -69,6 +69,49 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         app = app_context(ctx)
         raw = await app.client.request("GET", "/v1/system/summary")
         return SystemSummary.from_api(raw)
+
+    @mcp.tool(
+        name="nv_get_system_config",
+        annotations=READ_ONLY,
+        tags={"inventory", "read"},
+    )
+    async def nv_get_system_config(
+        ctx: Context,
+        scope: Annotated[
+            Literal["local", "fed"], Field(description="Configuration scope.")
+        ] = "local",
+    ) -> dict[str, Any]:
+        """Read non-sensitive system policy and automatic mode settings.
+
+        Only selected settings are returned; webhooks, authentication, proxies and
+        remote repositories are excluded. Federated configuration may not contain
+        these settings.
+
+        Calls GET /v2/system/config.
+        """
+        app = app_context(ctx)
+        body = await app.client.request("GET", "/v2/system/config", params={"scope": scope})
+        raw = body.get("config" if scope == "local" else "fed_config")
+        raw = raw if isinstance(raw, dict) else {}
+        allowed = {
+            "new_svc": (
+                "new_service_policy_mode",
+                "new_service_profile_mode",
+                "new_service_profile_baseline",
+            ),
+            "mode_auto": (
+                "mode_auto_d2m",
+                "mode_auto_m2p",
+                "mode_auto_d2m_duration",
+                "mode_auto_m2p_duration",
+            ),
+            "net_svc": ("strict_group_mode", "net_service_status", "net_service_policy_mode"),
+        }
+        return {
+            section: {key: value[key] for key in keys if key in value}
+            for section, keys in allowed.items()
+            if isinstance((value := raw.get(section)), dict)
+        }
 
     @mcp.tool(
         name="nv_list_workloads",

@@ -482,7 +482,7 @@ Complete contracts, argument by argument, are in `TOOLS.md`. Summary:
 
 | Toolset | Tools | Count |
 |---|---|---|
-| `inventory` | `nv_get_system_summary`, `nv_whoami`, `nv_list_workloads`, `nv_get_workload`, `nv_list_hosts`, `nv_list_groups`, `nv_get_group`, `nv_list_services`, `nv_list_enforcers`, `nv_list_namespaces`, `nv_get_network_conversations` | 11 |
+| `inventory` | `nv_get_system_summary`, `nv_get_system_config`, `nv_whoami`, `nv_list_workloads`, `nv_get_workload`, `nv_list_hosts`, `nv_list_groups`, `nv_get_group`, `nv_list_services`, `nv_list_enforcers`, `nv_list_namespaces`, `nv_get_network_conversations` | 12 |
 | `vulnerability` | `nv_list_image_scan_summaries`, `nv_get_scan_report`, `nv_get_scan_status`, `nv_list_scanners`, `nv_list_registries`, `nv_list_registry_images`, `nv_get_vulnerability_profile` | 7 |
 | `compliance` | `nv_get_compliance_findings`, `nv_get_bench_report`, `nv_list_compliance_profiles`, `nv_get_compliance_profile` | 4 |
 | `events` | `nv_query_security_events`, `nv_get_threat_detail`, `nv_query_audit_events`, `nv_query_system_events`, `nv_get_system_alerts` | 5 |
@@ -639,3 +639,5 @@ A phase is complete when its gate passes **and** the tool count in
 | `appendix/D-api-conventions.md` | Auth, paging, filtering, sorting, envelopes, scope/view/show — with source citations |
 | `TOOLS.md` | Every tool's arguments, return model, endpoint mapping and annotations |
 | `reference/` | The working, tested core to copy in Phase 0 |
+
+`nv_get_system_config` reads selected policy settings for local or federated scope without exposing webhook, authentication, proxy or repository configuration.
