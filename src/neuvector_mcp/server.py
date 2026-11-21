@@ -24,6 +24,7 @@ from .tools import (
     compliance_write,
     dlp,
     events,
+    federation,
     iam_read,
     iam_write,
     inventory,
@@ -51,6 +52,7 @@ SERVER_VERSION = "1.1.3"
 #: tools appear in ``tools/list``.
 TOOL_MODULES = (
     inventory,
+    federation,
     vulnerability,
     compliance,
     events,

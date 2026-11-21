@@ -267,6 +267,7 @@ the gate derives each tool's `readOnlyHint` from its toolset tag.
 | `compliance` | read | yes | 4 | workload/host compliance, CIS bench reports, compliance profiles |
 | `events` | read | yes | 5 | threats, violations, incidents, audits, system events, alerts |
 | `policy_read` | read | yes | 18 | network rules, process/file profiles, DLP sensors and groups, WAF sensors, response rules and options, admission state and rules, admission rule assessment |
+| `federation_read` | read | no | 2 | federation status and selected member reads |
 | `iam_read` | read | yes | 4 | users, roles, auth servers, API keys (metadata only) |
 | `policy_write` | write | **no** | 23 | create/update/delete groups, network rules (batch and single), process and file-monitor profiles, WAF and DLP sensors and group bindings, response rules, service creation |
 | `admission` | write | **no** | 5 | admission control state and rules, bulk rule deletion |
@@ -586,3 +587,5 @@ specification in `spec/SPEC.md`; `make verify` is the definition of done.
 
 ## License
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdarthzen%2Fneuvector-mcp.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdarthzen%2Fneuvector-mcp?ref=badge_large)
+
+Optional `federation_read` toolset: `nv_get_federation_status` and `nv_query_federation_member` provide read-only federation access. The master proxy requires fedAdmin, fedReader or equivalent federation read permission.

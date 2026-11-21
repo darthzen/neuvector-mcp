@@ -41,6 +41,8 @@ CALLS_RE = re.compile(
 #: Undocumented controller routes this project is permitted to use, each with a
 #: written justification. Anything outside this list fails rule R6.
 UNDOCUMENTED_ALLOWLIST: dict[str, str] = {
+    "GET /v1/fed/member": "federation membership from controller REST source",
+    "GET /v1/fed/cluster/{id}/{request}": "federation proxy from controller REST source",
     "GET /v1/conversation": "network graph; no documented equivalent exists",
     "GET /v1/conversation/{from}/{to}": "per-pair conversation detail",
     "GET /v1/vulasset": "paged vulnerability asset query; the only scalable vuln view",

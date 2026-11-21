@@ -282,6 +282,7 @@ mutating toolset fails rule R3.
 | `compliance` | read | on | workload/host compliance, CIS bench reports, compliance profiles |
 | `events` | read | on | threats, violations, incidents, audits, system events, alerts |
 | `policy_read` | read | on | network rules, process/file profiles, DLP sensors, WAF sensors/groups/rules, response rules, admission state and rules, admission rule assessment |
+| `federation_read` | read | off | federation status and selected member reads |
 | `iam_read` | read | on | users, roles, auth servers, API keys (metadata only) |
 | `policy_write` | write | **off** | create/update/delete groups, network rules, process and file-monitor profiles, WAF sensors and group bindings |
 | `admission` | write | **off** | admission control state and rules |
@@ -487,6 +488,7 @@ Complete contracts, argument by argument, are in `TOOLS.md`. Summary:
 | `compliance` | `nv_get_compliance_findings`, `nv_get_bench_report`, `nv_list_compliance_profiles`, `nv_get_compliance_profile` | 4 |
 | `events` | `nv_query_security_events`, `nv_get_threat_detail`, `nv_query_audit_events`, `nv_query_system_events`, `nv_get_system_alerts` | 5 |
 | `policy_read` | `nv_list_network_rules`, `nv_get_network_rule`, `nv_get_process_profile`, `nv_get_file_monitor_profile`, `nv_list_response_rules`, `nv_list_dlp_sensors`, `nv_list_waf_sensors`, `nv_get_waf_sensor`, `nv_list_waf_groups`, `nv_get_waf_group`, `nv_list_waf_rules`, `nv_get_admission_state`, `nv_list_admission_rules`, `nv_assess_admission_rule` | 14 |
+| `federation_read` | `nv_get_federation_status`, `nv_query_federation_member` | 2 |
 | `iam_read` | `nv_list_users`, `nv_list_roles`, `nv_list_auth_servers`, `nv_list_api_keys` | 4 |
 | `policy_write` | `nv_create_group`, `nv_update_group_criteria`, `nv_delete_group`, `nv_set_group_policy_mode`, `nv_apply_network_rule_changes`, `nv_delete_network_rule`, `nv_update_process_profile`, `nv_update_file_monitor_profile`, `nv_create_waf_sensor`, `nv_update_waf_sensor`, `nv_delete_waf_sensor`, `nv_set_waf_group` | 12 |
 | `admission` | `nv_set_admission_state`, `nv_create_admission_rule`, `nv_update_admission_rule`, `nv_delete_admission_rule` | 4 |
@@ -639,3 +641,5 @@ A phase is complete when its gate passes **and** the tool count in
 | `appendix/D-api-conventions.md` | Auth, paging, filtering, sorting, envelopes, scope/view/show — with source citations |
 | `TOOLS.md` | Every tool's arguments, return model, endpoint mapping and annotations |
 | `reference/` | The working, tested core to copy in Phase 0 |
+
+Optional `federation_read` toolset: `nv_get_federation_status` and `nv_query_federation_member` provide read-only federation access. The master proxy requires fedAdmin, fedReader or equivalent federation read permission.
