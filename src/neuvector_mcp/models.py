@@ -393,6 +393,8 @@ class HostBrief(BaseModel):
     scan_status: str = Field(
         default="", description="Host scan status, e.g. finished or unscanned."
     )
+    base_os: str = Field(default="", description="Base OS identified by the host scan.")
+    scan_result: str = Field(default="", description="Host scan result or error, when reported.")
     cap_kube_bench: bool = Field(
         default=False,
         description="True when nv_get_bench_report(benchmark='kubernetes') is possible.",
@@ -422,6 +424,8 @@ class HostBrief(BaseModel):
             high_vuls=int(scan.get("high") or 0),
             med_vuls=int(scan.get("medium") or 0),
             scan_status=str(scan.get("status", "") or ""),
+            base_os=str(scan.get("base_os", "") or ""),
+            scan_result=str(scan.get("result", "") or ""),
             cap_kube_bench=bool(raw.get("cap_kube_bench", False)),
             cap_docker_bench=bool(raw.get("cap_docker_bench", False)),
             kube_bench_status=str(raw.get("kube_bench_status", "") or ""),

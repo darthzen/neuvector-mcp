@@ -639,3 +639,5 @@ A phase is complete when its gate passes **and** the tool count in
 | `appendix/D-api-conventions.md` | Auth, paging, filtering, sorting, envelopes, scope/view/show — with source citations |
 | `TOOLS.md` | Every tool's arguments, return model, endpoint mapping and annotations |
 | `reference/` | The working, tested core to copy in Phase 0 |
+
+Host listings include the detected scan base OS and scan result when available.
