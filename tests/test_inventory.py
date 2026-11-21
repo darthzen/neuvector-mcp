@@ -454,3 +454,27 @@ async def test_network_conversations_blocked_when_undocumented_denied(
         await client.call_tool("nv_get_network_conversations", {})
     assert route.call_count == 0, "the guard must fire before any network call"
     assert "NV_ALLOW_UNDOCUMENTED" in str(excinfo.value)
+
+
+async def test_host_scan_details_include_base_os_and_result(client, nv_mock):
+    nv_mock.get("/v1/host").respond(
+        200,
+        json={
+            "hosts": [
+                {
+                    "id": "host-a",
+                    "scan_summary": {
+                        "status": "finished",
+                        "base_os": "example:1",
+                        "result": "unsupported OS",
+                    },
+                },
+                {"id": "host-b"},
+            ]
+        },
+    )
+    result = await client.call_tool("nv_list_hosts", {})
+    assert result.data.hosts[0].base_os == "example:1"
+    assert result.data.hosts[0].scan_result == "unsupported OS"
+    assert result.data.hosts[1].base_os == ""
+    assert result.data.hosts[1].scan_result == ""
