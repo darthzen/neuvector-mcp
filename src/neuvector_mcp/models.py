@@ -448,12 +448,17 @@ class GroupBrief(BaseModel):
         default="", description="Kubernetes namespace (controller field 'domain')."
     )
     policy_mode: PolicyMode = Field(default="", description="Policy mode applied to members.")
+    profile_mode: PolicyMode = Field(default="", description="Process and file profile mode.")
     kind: str = Field(default="", description="Group kind, e.g. container, node or address.")
     learned: bool = Field(
         default=False, description="True when NeuVector created this group itself."
     )
     reserved: bool = Field(
         default=False, description="True for built-in groups that cannot be deleted."
+    )
+    cfg_type: str = Field(
+        default="",
+        description="learned | user_created | ground | federal. 'ground' groups come from CRDs.",
     )
     platform_role: str = Field(default="", description="Platform role, e.g. system, when set.")
     member_count: int = Field(default=0, description="Number of workloads currently in the group.")
@@ -469,9 +474,11 @@ class GroupBrief(BaseModel):
             name=str(raw.get("name", "")),
             namespace=str(raw.get("domain", "") or ""),
             policy_mode=str(raw.get("policy_mode", "") or ""),  # type: ignore[arg-type]
+            profile_mode=str(raw.get("profile_mode", "") or ""),  # type: ignore[arg-type]
             kind=str(raw.get("kind", "") or ""),
             learned=bool(raw.get("learned", False)),
             reserved=bool(raw.get("reserved", False)),
+            cfg_type=str(raw.get("cfg_type", "") or ""),
             platform_role=str(raw.get("platform_role", "") or ""),
             member_count=len(raw.get("members") or []),
             policy_rule_count=len(raw.get("policy_rules") or []),
